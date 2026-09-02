@@ -1,0 +1,21 @@
+# Quarto / knitr render artifacts
+/.quarto/
+*_files/
+*_cache/
+slides.html
+*.html
+
+# SAS logs / listing
+*.log
+*.lst
+
+# Python / SASPy virtual env & config
+.venv/
+sascfg_personal.py
+authinfo
+_authinfo
+
+# R
+.Rproj.user/
+.Rhistory
+.RData

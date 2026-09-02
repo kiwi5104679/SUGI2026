@@ -1,0 +1,174 @@
+---
+title: "レポーティングにおけるRとSASの共存 - 単一ソースによる実行と文書化 -"
+subtitle: "SUGI 2026"
+author: "Shunsuke Goto"
+date: today
+lang: ja
+format:
+  revealjs:
+    theme: default
+    slide-number: true
+    code-line-numbers: true
+    highlight-style: github
+    incremental: false
+engine: knitr
+---
+
+## 背景 {.smaller}
+
+- 近年の統計プログラミング業務では、**オープンソース活用の拡大**に伴い、SASとRを併用するケースが増えている。
+- SASとRを併用する場面の例:
+  - **QC目的**でSASとRの結果を突き合わせたい
+  - 統計解析はSASで行いつつ、Rの豊富なエコシステムを**可視化・レポーティング**に利用したい
+- 一方で、両言語を併用する環境では**コード管理と文書作成が分断**されやすく、
+  **再現性・保守性の確保**が課題となる。
+- 本発表では、RとSASを連携する技術の変遷を概観したうえで、
+  **Rを起点に両言語を単一スクリプト内で共存・文書化**するためのモダンな選択肢を整理する。
+
+## 本発表で扱う3つの方法
+
+| アプローチ | エンジン/仕組み | SASの実行環境 |
+|---|---|---|
+| **Quarto単体** | knitr `{sas}`エンジン | ローカルSASが必須 |
+| **SASmarkdown** | knitr SASエンジンの拡張 | ローカルSASが必須 |
+| **sasquatch** | SASPy + reticulate | ローカル / **リモート**（SAS OnDemand等） |
+
+
+# Quarto単体のSASコードブロック
+## Quarto単体のSASコードブロック {.smaller}
+
+- Quartoはknitrエンジン経由で、標準の`{sas}`コードブロックを持つ。
+- RチャンクとSASチャンクを**同一ドキュメント内**に記述できる。
+- ただし、内部で**ローカルのSAS**を呼び出すため、Rと同じマシンにSASがインストールされている必要がある。
+
+Rチャンク（そのまま実行）:
+```{r}
+#| echo: true
+x <- rnorm(5)
+mean(x)
+```
+
+SASチャンク（Quarto標準の`{sas}`ブロック）:
+
+````markdown
+```{{sas}}
+proc means data=sashelp.cars;
+  var mpg_city;
+run;
+```
+````
+
+# SASmarkdownとは
+## SASmarkdownとは {.smaller}
+
+- Doug Hemken氏による**Rパッケージ**。
+- knitrのSAS言語エンジンを**拡張**し、R Markdown/QuartoからSASを扱いやすくするための設定・関数群を提供する。
+- 代表的な機能:
+  - `sas`, `saslog`, `sashtml`など**複数のエンジン**でログ/出力/HTMLを切り替え
+  - SAS実行ファイルのパス設定ヘルパー
+- 内部で**ローカルのSAS**を呼び出すため、Rと同じマシンにSASがインストールされている必要がある。
+
+```{r}
+#| echo: true
+#| eval: false
+install.packages("SASmarkdown")
+library(SASmarkdown)
+# SAS 実行ファイルのパスを指定
+sas_enginesetup(sas = "C:/Program Files/SASHome/.../sas.exe")
+```
+
+## SASmarkdownの実行 {.smaller}
+
+エンジン名を切り替えることで、ログ付き / 出力のみ / HTMLを選択できる。
+
+出力のみ（`sas`エンジン）:
+
+````markdown
+```{{sas}}
+proc means data=sashelp.cars;
+  var mpg_city mpg_highway;
+run;
+```
+````
+
+ログを含める（`saslog`エンジン）:
+
+````markdown
+```{{saslog}}
+data work.cars;
+  set sashelp.cars;
+  ratio = mpg_city / mpg_highway;
+run;
+```
+````
+
+# sasquatchとは
+## sasquatchとは {.smaller}
+
+- rOpenSciの**Rパッケージ**
+- **SASPy**（Python）＋ **reticulate**経由でSASセッションと連携する
+- **リモートSAS**にも接続できるため、ローカルにSASが無くても実行可能。
+- 無料の**SAS OnDemand for Academics (ODA)**に接続可能
+- `sas_from_r()` / `sas_to_r()`で**RとSAS間のデータ受け渡し**が容易。
+- できること: SASコードブロックの実行、データの相互変換、
+  SAS風スタイルのHTML/LaTeXレンダリング。
+
+```{r}
+#| echo: true
+#| eval: false
+install.packages("sasquatch")
+library(sasquatch)
+sasquatch::install_saspy()              # SASPy を仮想環境に導入
+sasquatch::configure_saspy(template = "oda")  # ODA 接続設定を作成
+```
+
+## sasquatch {.smaller}
+
+セッションに接続してから、通常の`{sas}`ブロックを実行できる。
+
+セットアップ（Rチャンク）:
+
+```{r}
+#| echo: true
+#| eval: false
+library(sasquatch)
+sas_connect()   # ODA など設定済みの SAS セッションへ接続
+```
+
+SASチャンク（sasquatchエンジンで実際に実行・レンダリング）:
+
+````markdown
+```{{sas}}
+proc means data=sashelp.cars;
+  var mpg_city mpg_highway;
+run;
+```
+````
+
+RとSAS間のデータ受け渡し:
+
+```{r}
+#| echo: true
+#| eval: false
+sas_from_r(warpbreaks, "warpbreaks")          # R → SAS
+sas_cars <- sas_to_r("cars", libref = "sashelp")  # SAS → R
+```
+
+## まとめ {.smaller}
+
+- SASとRの併用では、**コードと文書の分断**が再現性・保守性の課題。
+- 単一のQuartoドキュメントにR/SASを共存させることで解決できる。
+
+| | ローカルSAS不要 | R⇔SASデータ連携 | 導入の手軽さ |
+|---|:---:|:---:|:---:|
+| Quarto単体 | ✕ | △ | ○ |
+| SASmarkdown | ✕ | △ | ◎ |
+| sasquatch | **○** | **◎** | △ |
+
+- **ローカルにSASが無い環境**では、リモートSAS（ODA）に接続できる**sasquatch**が有力な選択肢。
+
+## References {.smaller}
+- Quarto: <https://quarto.org>
+- SASmarkdown (CRAN / GitHub): <https://github.com/Hemken/SASmarkdown>
+- sasquatch (rOpenSci): <https://docs.ropensci.org/sasquatch/>
+- SAS OnDemand for Academics: <https://welcome.oda.sas.com/>
