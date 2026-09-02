@@ -14,15 +14,15 @@ SAS Users Group Conference 2026
 | `README.md` | 環境と手順 |
 
 ### 構成
--背景
--本発表で扱う3つの方法
--Quarto単体のSASコードブロック
--SASmarkdownとは
--SASmarkdownの実行
--sasquatchとは
--sasquatchの実行
--まとめ
--References
+- 背景
+- 本発表で扱う3つの方法
+- Quarto単体のSASコードブロック
+- SASmarkdownとは
+- SASmarkdownの実行
+- sasquatchとは
+- sasquatchの実行
+- まとめ
+- References
 
 ### 前提環境
 

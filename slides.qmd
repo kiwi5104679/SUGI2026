@@ -154,7 +154,7 @@ sas_from_r(warpbreaks, "warpbreaks")          # R → SAS
 sas_cars <- sas_to_r("cars", libref = "sashelp")  # SAS → R
 ```
 
-## まとめ {.smaller}
+## Summary {.smaller}
 
 - SASとRの併用では、**コードと文書の分断**が再現性・保守性の課題。
 - 単一のQuartoドキュメントにR/SASを共存させることで解決できる。
