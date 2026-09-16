@@ -7,11 +7,21 @@ lang: ja
 format:
   revealjs:
     theme: default
-    slide-number: true
-    code-line-numbers: true
     highlight-style: github
     incremental: false
+    embed-resources: false
+    width: 1600
+    height: 900
+    slide-number: true
+    show-slide-number: all
+    code-copy: true
+    code-annotations: hover
+    auto-stretch: false
 engine: knitr
+knitr:
+  opts_chunk:
+    engine.path:
+      sas: "/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas"
 ---
 
 # Introduction {.smaller}
@@ -23,16 +33,17 @@ engine: knitr
 > 本発表では、RとSASを連携する技術の変遷を概観し、\
 > **両言語を両立したレポーティング手法**を整理することを目的とする。
 
-## Markdownを用いたReporting{.smaller}
-- QuartoをはじめとするMarkdownでは、文章の中に**コードとその実行結果**を表示できる
-- コードを再実行することで、解析結果を反映したレポートを効率的かつ再現可能な形で更新できる。
-- 本スライドもMarkdown形式で作成されている。
+## Quartoを用いたReporting{.smaller}
+- Markdownでは、文章の中に**コード**を表示できる
+- コードを再実行することで、解析結果を反映したレポートを効率的かつ再現可能な形で更新できる。Quartoをはじめとする
+- 本スライドもMarkdown形式で作成されている
 
 [](figures/2026-09-16-11-01-01.png2026-09-16-11-01-01.png)
 
 ```{r}
-#| echo: true
+#/ echo: true
 #| output: true
+#| fig-keep: none
 head(iris, 5)
 ```
 
@@ -56,21 +67,30 @@ head(iris, 5)
 - RチャンクとSASチャンクを**同一ドキュメント内**に記述できる。
 - ただし、内部で**ローカルのSAS**を呼び出すため、Rと同じマシンにSASがインストールされている必要がある。
 
-Rチャンク（そのまま実行）:
+## Rチャンク
+````markdown
+```{r}
+#| echo: true
+x <- rnorm(5)
+mean(x)
+```
+````
+
 ```{r}
 #| echo: true
 x <- rnorm(5)
 mean(x)
 ```
 
-SASチャンク（Quarto標準の`{sas}`ブロック）:
-````markdown
-```{{sas}}
+## SASチャンク
+
+```{sas}
+*| echo: fenced;
 proc means data=sashelp.cars;
-  var mpg_city;
+  var mpg_city mpg_highway;
 run;
 ```
-````
+
 
 # SASmarkdownとは
 ## SASmarkdownとは {.smaller}
@@ -176,8 +196,8 @@ sas_cars <- sas_to_r("cars", libref = "sashelp")  # SAS → R
 
 | | ローカルSAS不要 | R⇔SASデータ連携 | 導入の手軽さ |
 |---|:---:|:---:|:---:|
-| Quarto単体 | ✕ | △ | ○ |
-| SASmarkdown | ✕ | △ | ◎ |
+| Quarto単体 | ✕ | △ | ◎ |  
+| SASmarkdown | ✕ | △ | ○ |
 | sasquatch | **○** | **◎** | △ |
 
 - **ローカルにSASが無い環境**では、リモートSAS（ODA）に接続できる**sasquatch**が有力な選択肢。
