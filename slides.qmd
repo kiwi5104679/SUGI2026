@@ -1,12 +1,14 @@
 ---
 title: "レポーティングにおけるRとSASの共存 - 単一ソースによる実行と文書化 -"
 subtitle: "SUGI 2026"
-author: "Shunsuke Goto"
+author: 
+  - Shunsuke Goto
+  - Hiroki Nishikawa
 date: today
 lang: ja
 format:
   revealjs:
-    theme: default
+    theme: serif
     highlight-style: github
     incremental: false
     embed-resources: false
@@ -27,63 +29,53 @@ knitr:
 # Introduction {.smaller}
 
 ## 目的 {.smaller}
-- Markdownでは、コード・結果・文章を一体化して再現性の高いレポートを作成することが可能であり、統計解析のレポーティングに有用である。
+- Quartoでは、コード・結果・文章を一体化して再現性の高いレポートを作成することが可能であり、統計解析のレポーティングに有用である。
 - 近年の統計プログラミング業務ではSASとRを併用するケースが増えているが、Markdownにおける複数言語の利用はコード実行や管理を複雑化させる。
 
 > 本発表では、RとSASを連携する技術の変遷を概観し、\
 > **両言語を両立したレポーティング手法**を整理することを目的とする。
 
-## Quartoを用いたReporting{.smaller}
-- Markdownでは、文章の中に**コード**を表示できる
-- コードを再実行することで、解析結果を反映したレポートを効率的かつ再現可能な形で更新できる。Quartoをはじめとする
+## Quartoを用いたReporting
+- QuartoはMarkdownを基にしたドキュメント作成ツールであり、文章の中に**コードと実行結果**を表示できる
+- ドキュメント内でコードを再実行することで、解析結果を反映したレポートを効率的かつ再現可能な形で更新できる
 - 本スライドもMarkdown形式で作成されている
 
-[](figures/2026-09-16-11-01-01.png2026-09-16-11-01-01.png)
 
 ```{r}
-#/ echo: true
+#| echo: true
 #| output: true
-#| fig-keep: none
 head(iris, 5)
 ```
 
 
 
 
-## 本発表で扱う3つの方法{.smaller}
+## 本発表で扱う3つの方法
 
 | アプローチ | エンジン/仕組み | SASの実行環境 |
 |---|---|---|
-| **Quarto単体** | knitr SASエンジン | ローカルSASが必須 |
-| **SASmarkdown** | knitr SASエンジンの拡張 | ローカルSASが必須 |
+| **Quarto単体** | knitr SASエンジン | ローカルSAS |
+| **SASmarkdown** | knitr SASエンジンの拡張 | ローカルSAS |
 | **sasquatch** | SASPy + reticulate | ローカル / **リモート**（SAS OnDemand等） |
 
 
 
 # Quarto単体のSASコードブロック{.smaller}
-## Quarto単体のSASコードブロック {.smaller}
+## Quarto単体のSASコードブロック
 
-- Quartoはknitrエンジン経由で、標準の`{sas}`コードブロックを持つ。
-- RチャンクとSASチャンクを**同一ドキュメント内**に記述できる。
+- Quartoは{knitr}のエンジン経由で、`{sas}`コードブロックを実行できる
+- RチャンクとSASチャンクを使い分けることで、**同一ドキュメント内**に記述できる。
 - ただし、内部で**ローカルのSAS**を呼び出すため、Rと同じマシンにSASがインストールされている必要がある。
 
 ## Rチャンク
-````markdown
-```{r}
-#| echo: true
-x <- rnorm(5)
-mean(x)
-```
-````
 
 ```{r}
-#| echo: true
+#| echo: fenced
 x <- rnorm(5)
 mean(x)
 ```
 
 ## SASチャンク
-
 ```{sas}
 *| echo: fenced;
 proc means data=sashelp.cars;
