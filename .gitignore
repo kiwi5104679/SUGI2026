@@ -19,3 +19,7 @@ _authinfo
 .Rproj.user/
 .Rhistory
 .RData
+
+# Local development scratch folder
+/dev/
+SASmarkdown*
