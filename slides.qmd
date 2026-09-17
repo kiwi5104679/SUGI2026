@@ -3,7 +3,7 @@ title: "レポーティングにおける<br>RとSASの共存<br>- 単一ソー�
 subtitle: "SASユーザー総会 2026"
 author: 
   - Shunsuke Goto (Novartis Pharma K.K.)
-  - Hiroki Nishikawa (Kyowa Kirin)
+  - Tomoki Nishikawa (Kyowa Kirin)
 date: today
 lang: ja
 format:
@@ -179,8 +179,9 @@ sas_cars <- sas_to_r("cars", libref = "sashelp")  # SAS → R
 | SASmarkdown | ✕ | △ | ○ |
 | sasquatch | **○** | **◎** | △ |
 
-> **ローカルにSASがある環境**では、**Quarto**単体が手軽に導入可能
-> **ローカルにSASが無い環境**では、リモートSAS（ODA）に接続できる**sasquatch**が有力な選択肢
+> **ローカルにSASがある環境**では、**Quarto**単体が手軽に導入可能 \
+> **ローカルにSASが無い環境**では、リモートSAS（ODA）に接続できる**sasquatch**が \
+> 有力な選択肢
 
 ## References {.smaller}
 - Quarto: <https://quarto.org>
