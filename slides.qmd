@@ -27,6 +27,15 @@ knitr:
       sas: "/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas"
 ---
 
+```{r setup}
+#| echo: false
+#| output: false
+Sys.unsetenv("PYTHONPATH")
+setwd("dev")
+brave::adhocRequire("SASmarkdown", ref="pinned") 
+setwd("..")
+```
+
 # Introduction {.smaller}
 ## Disclaimer
 本プレゼンテーションで述べられている見解および意見は発表者個人のものであり、その他の個人または組織の見解や意見を反映するものではありません。
@@ -102,75 +111,103 @@ run;
 ## SASmarkdown {.smaller}
 
 - Doug Hemken氏による**Rパッケージ**。
-- knitrのSAS言語エンジンを**拡張**し、R Markdown/QuartoからSASを扱いやすくするための設定・関数群を提供する。
-  - `sas_enginesetup`でSAS実行ファイルのパスを設定可能
-  - 実行のみ/ログ出力/HTML出力を切り替えることができる
+- knitrのSAS言語エンジンを**拡張**し、実行のみ/ログ出力/HTML出力を切り替えることができる
 - Quarto単体と同様に**ローカルのSAS**を呼び出す必要がある。
+
+> Quarto単体では出力できないlogを出力可能
 
 ```{r}
 #| echo: true
-#| eval: false
 library(SASmarkdown)
-sas_enginesetup(sas = "C:/Program Files/SASHome/.../sas.exe")
+saspath <- "/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas"
+knitr::opts_chunk$set(
+  engine.path = list(
+    sas         = saspath,
+    saslog      = saspath,
+    sashtml     = saspath
+  ),
+  comment = NA
+)
 ```
 
-## SASmarkdown ログの表示
+## SASmarkdown ログの表示 {.smaller}
 
-````markdown
-```{{saslog}}
-data work.cars;
-  set sashelp.cars;
-  ratio = mpg_city / mpg_highway;
-run;
-```
-````
 
-## SASmarkdown htmlの表示
-````markdown
-```{{sashtml}}
+```{saslog}
+#| echo: fenced
 proc means data=sashelp.cars;
   var mpg_city mpg_highway;
 run;
 ```
-````
 
+> Quarto SAS単体では出力できなかったLogを表示可能 \
+> `{sashtml}`へ切り替えることでhtml形式での出力も可能
 
 # sasquatch
 ## sasquatch {.smaller}
 
-- rOpenSciの**Rパッケージ**
-- **SASPy**（Python）＋ **reticulate**経由でSASセッションと連携する
-- **SAS OnDemand for Academics (ODA)**をはじめとする**リモートSAS**にも接続できるため、ローカルにSASが無くても実行可能。
-- `sas_from_r()` / `sas_to_r()`で**RとSAS間のデータ受け渡し**が容易。
-
 ```{r}
-#| echo: true
-#| eval: false
-install.packages("sasquatch")
-library(sasquatch)
-sasquatch::install_saspy()              # SASPy を仮想環境に導入
-sasquatch::configure_saspy(template = "oda")  # ODA 接続設定を作成
-sas_connect()   # SASセッションへ接続
+#| echo: false
+#| output: false
+setwd("dev")
+brave::adhocRequire("sasquatch"  , ref="pinned") 
+setwd("..")
 ```
 
-## sasquatchによるSASチャンク
+- rOpenSciの**Rパッケージ**
+- **SASPy**（Python）＋ **reticulate**経由でSASセッションと連携する
+- **SAS OnDemand for Academics (ODA)**をはじめとする**リモートSAS**にも接続可能
+- `sas_from_r()` / `sas_to_r()`で**RとSAS間のデータ受け渡し**が容易
 
-````markdown
-```{{sas}}
+
+以下は初期設定のためのCodeであり、Quarto documentに含める必要は無い
+```{r}
+#| echo: fenced
+#| eval: false
+library(sasquatch)
+sasquatch::install_saspy() 
+sasquatch::configure_saspy()
+```
+
+以下のような`.py` fileを設定することが必要。こちらもdocumentには不要
+```{python}
+#| eval: false
+#| echo: fenced
+SAS_config_names = ['config_name']
+config_name = {
+  'saspath': '/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas'
+}
+```
+
+
+## sasquatchによるSASチャンク
+```{r}
+library(sasquatch)
+sas_connect(cfgname = "config_name")
+```
+
+```{sas}
+*| echo: fenced;
 proc means data=sashelp.cars;
   var mpg_city mpg_highway;
 run;
 ```
-````
 
 ## RとSAS間のデータ受け渡し
 
 ```{r}
-#| echo: true
-#| eval: false
-sas_from_r(warpbreaks, "warpbreaks")          # R → SAS
-sas_cars <- sas_to_r("cars", libref = "sashelp")  # SAS → R
+#| echo: fenced
+sas_from_r(mtcars, "mtcars", libref = "WORK")
 ```
+
+```{sas}
+*| echo: fenced;
+proc means data=work.mtcars;
+  var mpg disp;
+run;
+```
+
+> `sas_to_r()`を用いることで、SAS -> Rのデータの受け渡しも可能
 
 ## Summary
 
@@ -178,14 +215,30 @@ sas_cars <- sas_to_r("cars", libref = "sashelp")  # SAS → R
 |---|:---:|:---:|:---:|
 | Quarto単体 | ✕ | △ | ◎ |  
 | SASmarkdown | ✕ | △ | ○ |
-| sasquatch | **○** | **◎** | △ |
+| sasquatch | **○** | **◎** | ✕ |
 
 > **ローカルにSASがある環境**では、**Quarto**単体が手軽に導入可能 \
-> **ローカルにSASが無い環境**では、リモートSAS（ODA）に接続できる**sasquatch**が \
-> 有力な選択肢
+> **ローカルにSASが無い環境**では、**sasquatch**でリモートSAS（ODA）に接続可能
 
 ## References {.smaller}
 - Quarto: <https://quarto.org>
 - SASmarkdown (CRAN / GitHub): <https://github.com/Hemken/SASmarkdown>
 - sasquatch (rOpenSci): <https://docs.ropensci.org/sasquatch/>
 - SAS OnDemand for Academics: <https://welcome.oda.sas.com/>
+
+# Back Up
+## Chunk optionの記述方法
+R/SASmarkdownではChunk optionの冒頭に`#|`を記述する必要がある
+```{r}
+#| echo: fenced
+#| eval: false
+print("Test")
+```
+
+Quarto SAS/sasquatchでは冒頭の`#|`の代わりに、冒頭に`*|`を、末尾に`;`を付与する必要がある。
+```{sas}
+*| echo: fenced;
+proc means data=sashelp.cars;
+  var mpg_city mpg_highway;
+run;
+```

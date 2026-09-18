@@ -19,7 +19,10 @@ _authinfo
 .Rproj.user/
 .Rhistory
 .RData
+*.Rproj
 
 # Local development scratch folder
 /dev/
 SASmarkdown*
+sasquatch*
+quartosas*
