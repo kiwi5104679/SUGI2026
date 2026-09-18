@@ -4,7 +4,7 @@ subtitle: "SASユーザー総会 2026"
 author: 
   - Shunsuke Goto (Novartis Pharma K.K.)
   - Tomoki Nishikawa (Kyowa Kirin)
-date: today
+date: 2026-10-15
 lang: ja
 format:
   revealjs:
@@ -18,7 +18,8 @@ format:
     show-slide-number: all
     code-copy: true
     code-annotations: hover
-    auto-stretch: false
+    auto-stretch: True
+    
 engine: knitr
 knitr:
   opts_chunk:
