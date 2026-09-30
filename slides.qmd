@@ -41,7 +41,7 @@ setwd("..")
 
 # Introduction
 
-## 背景と目的{.smaller}
+## 背景と目的
 - QuartoはMarkdownを基にしたドキュメント作成ツールである。
 - 文章の中に**コードと実行結果**を表示でき、統計解析のレポーティングに有用である。
 - 近年の統計プログラミング業務ではSASとRを併用するケースが増えているが、\
@@ -77,15 +77,6 @@ head(iris, 5)
 - Quartoは{knitr}のエンジン経由で、`{sas}`コードブロックを実行できる
 - RチャンクとSASチャンクを使い分けることで、**同一ドキュメント内**に記述できる。
 - ただし、内部で**ローカルのSAS**を呼び出すため、Rと同じマシンにSASがインストールされている必要がある
-- SASのPathを`yml`にて記述する必要がある
-
-```markdown
-engine: knitr
-knitr:
-  opts_chunk:
-    engine.path:
-      sas: "/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas"
-```
 
 
 ## Rチャンク
@@ -109,13 +100,14 @@ run;
 ## SASmarkdown
 
 - Doug Hemken氏による**Rパッケージ**。
-- knitrのSAS言語エンジンを**拡張**し、実行のみ/ログ出力/HTML出力を切り替えることができる
+- knitrのSAS言語エンジンを**拡張**し、実行のみ/ログ出力/HTML出力を簡便に切り替えることができる
 - Quarto単体と同様に**ローカルのSAS**を呼び出す必要がある。
 
-> Quarto単体では出力できないlogを出力可能
+> Quarto単体の標準では出力できないlogを出力可能
 
 ```{r}
-#| echo: true
+#| echo: false
+#| output: false
 library(SASmarkdown)
 saspath <- "/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas"
 knitr::opts_chunk$set(
@@ -128,6 +120,7 @@ knitr::opts_chunk$set(
 )
 ```
 
+
 ## SASmarkdown ログの表示{.smaller}
 
 
@@ -138,7 +131,7 @@ proc means data=sashelp.cars;
 run;
 ```
 
-> Quarto SAS単体では出力できなかったLogを表示可能 \
+> Quarto SAS単体の標準では出力できなかったLogを表示可能 \
 > `{sashtml}`へ切り替えることでhtml形式での出力も可能
 
 # sasquatch
@@ -156,7 +149,6 @@ setwd("..")
 - **SASPy**（Python）＋ **reticulate**経由でSASセッションと連携する
 - **SAS OnDemand for Academics (ODA)**をはじめとする**リモートSAS**にも接続可能
 - `sas_from_r()` / `sas_to_r()`で**RとSAS間のデータ受け渡し**が容易
-
 
 以下は初期設定のためのCodeであり、Quarto documentに含める必要は無い
 ```{r}
@@ -186,6 +178,8 @@ sas_connect(cfgname = "config_name")
 
 ```{sas}
 *| echo: fenced;
+*| capture: listing;
+*| cache: false;
 proc means data=sashelp.cars;
   var mpg_city mpg_highway;
 run;
@@ -200,6 +194,8 @@ sas_from_r(mtcars, "mtcars", libref = "WORK")
 
 ```{sas}
 *| echo: fenced;
+*| capture: listing;
+*| cache: false;
 proc means data=work.mtcars;
   var mpg disp;
 run;
@@ -240,4 +236,51 @@ Quarto SAS/sasquatchでは冒頭の`#|`の代わりに、冒頭に`*|`を、末�
 proc means data=sashelp.cars;
   var mpg_city mpg_highway;
 run;
+```
+
+## Quarto単体のSAS コードブロック 設定方法{.smaller}
+- SASのPathを`yml`にて記述する必要がある
+
+```markdown
+engine: knitr
+knitr:
+  opts_chunk:
+    engine.path:
+      sas: "/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas"
+```
+
+## SASmarkdown 設定方法{.smaller}
+`sas`, `saslog`などのコードブロックを使用する前に、engine名やSASのPathを設定する必要がある
+```{r}
+#| echo: true
+library(SASmarkdown)
+saspath <- "/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas"
+knitr::opts_chunk$set(
+  engine.path = list(
+    sas         = saspath,
+    saslog      = saspath,
+    sashtml     = saspath
+  ),
+  comment = NA
+)
+```
+
+## sasquatch 設定方法{.smaller}
+以下は初期設定のためのCodeであり、Quarto documentに含める必要は無い
+```{r}
+#| echo: fenced
+#| eval: false
+library(sasquatch)
+sasquatch::install_saspy() 
+sasquatch::configure_saspy()
+```
+
+以下のような`.py` fileを設定することが必要。こちらもdocumentには不要
+```{python}
+#| eval: false
+#| echo: fenced
+SAS_config_names = ['config_name']
+config_name = {
+  'saspath': '/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas'
+}
 ```

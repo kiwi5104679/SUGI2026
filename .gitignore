@@ -2,8 +2,7 @@
 /.quarto/
 *_files/
 *_cache/
-slides.html
-*.html
+
 
 # SAS logs / listing
 *.log
