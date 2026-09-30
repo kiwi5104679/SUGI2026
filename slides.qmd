@@ -53,7 +53,7 @@ head(iris, 5)
 ```
 
 
-> 本発表では、RとSASを連携する技術の変遷を概観し、\
+> 本発表では、RとSASを連携してレポーティングする技術を概観し、\
 > **両言語を両立したレポーティング手法**を整理することを目的とする。
 
 ## 本発表で扱う3つの方法
@@ -77,6 +77,7 @@ head(iris, 5)
 - Quartoは{knitr}のエンジン経由で、`{sas}`コードブロックを実行できる
 - RチャンクとSASチャンクを使い分けることで、**同一ドキュメント内**に記述できる。
 - ただし、内部で**ローカルのSAS**を呼び出すため、Rと同じマシンにSASがインストールされている必要がある
+- [Link: Quarto SASのSetup方法](#set-quart)
 
 
 ## Rチャンク
@@ -102,6 +103,7 @@ run;
 - Doug Hemken氏による**Rパッケージ**。
 - knitrのSAS言語エンジンを**拡張**し、実行のみ/ログ出力/HTML出力を簡便に切り替えることができる
 - Quarto単体と同様に**ローカルのSAS**を呼び出す必要がある。
+- [Link: SASmarkdownのSetup方法](#set-SASmarkdown)
 
 > Quarto単体の標準では出力できないlogを出力可能
 
@@ -149,25 +151,7 @@ setwd("..")
 - **SASPy**（Python）＋ **reticulate**経由でSASセッションと連携する
 - **SAS OnDemand for Academics (ODA)**をはじめとする**リモートSAS**にも接続可能
 - `sas_from_r()` / `sas_to_r()`で**RとSAS間のデータ受け渡し**が容易
-
-以下は初期設定のためのCodeであり、Quarto documentに含める必要は無い
-```{r}
-#| echo: fenced
-#| eval: false
-library(sasquatch)
-sasquatch::install_saspy() 
-sasquatch::configure_saspy()
-```
-
-以下のような`.py` fileを設定することが必要。こちらもdocumentには不要
-```{python}
-#| eval: false
-#| echo: fenced
-SAS_config_names = ['config_name']
-config_name = {
-  'saspath': '/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas'
-}
-```
+- 環境設定の方法が多少煩雑。[Link: sasquatchの設定方法](#set-sasquatch)
 
 
 ## sasquatchによるSASチャンク
@@ -176,9 +160,8 @@ library(sasquatch)
 sas_connect(cfgname = "config_name")
 ```
 
-```{sas}
+```{sas, capture="log"}
 *| echo: fenced;
-*| capture: listing;
 *| cache: false;
 proc means data=sashelp.cars;
   var mpg_city mpg_highway;
@@ -186,22 +169,13 @@ run;
 ```
 
 ## RとSAS間のデータ受け渡し
-
 ```{r}
 #| echo: fenced
-sas_from_r(mtcars, "mtcars", libref = "WORK")
+sas_cars <- sas_to_r("cars", libref = "sashelp")
+head(sas_cars,5)
 ```
 
-```{sas}
-*| echo: fenced;
-*| capture: listing;
-*| cache: false;
-proc means data=work.mtcars;
-  var mpg disp;
-run;
-```
-
-> `sas_to_r()`を用いることで、SAS -> Rのデータの受け渡しも可能
+> `sas_from_r()`を用いることで、R -> SASのデータの受け渡しも可能
 
 ## Summary
 
@@ -238,7 +212,7 @@ proc means data=sashelp.cars;
 run;
 ```
 
-## Quarto単体のSAS コードブロック 設定方法{.smaller}
+## Quarto単体のSAS コードブロック 設定方法 {#set-quart}
 - SASのPathを`yml`にて記述する必要がある
 
 ```markdown
@@ -249,7 +223,7 @@ knitr:
       sas: "/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas"
 ```
 
-## SASmarkdown 設定方法{.smaller}
+## SASmarkdown 設定方法 {#set-SASmarkdown}
 `sas`, `saslog`などのコードブロックを使用する前に、engine名やSASのPathを設定する必要がある
 ```{r}
 #| echo: true
@@ -265,7 +239,7 @@ knitr::opts_chunk$set(
 )
 ```
 
-## sasquatch 設定方法{.smaller}
+## sasquatch 設定方法 {#set-sasquatch}
 以下は初期設定のためのCodeであり、Quarto documentに含める必要は無い
 ```{r}
 #| echo: fenced
@@ -284,3 +258,25 @@ config_name = {
   'saspath': '/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas'
 }
 ```
+
+## RとSAS間のデータ受け渡し sas_from_r
+```{r}
+#| echo: fenced
+sas_from_r(mtcars, "mtcars", libref = "WORK")
+```
+
+```{sas}
+*| echo: fenced;
+*| capture: listing;
+*| cache: false;
+proc means data=work.mtcars;
+  var mpg disp;
+run;
+```
+
+
+
+## sasquatchの仕様上の注意点{.smaller}
+- sasquatchはhtml/latexによる出力を想定しており、それ以外のoutputでは体裁が崩れる
+- sasquatch : <https://github.com/ropensci/sasquatch#sasquatch>
+- 本ドキュメントはreveal.jsという形式で出力されている。このため、表示結果が不安定だが、captureをlogに絞ることで回避できる

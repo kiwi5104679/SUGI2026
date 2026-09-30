@@ -20,7 +20,7 @@ format: html
 
 ## 解決策
 ### 1. 仮想環境内に正しい numpy/pandas/saspy を実体インストール
-```r
+```{r}
 reticulate::virtualenv_install(
   envname = "/home/gotosh3/.virtualenvs/r-saspy",
   packages = c("numpy", "pandas", "saspy"),
@@ -30,12 +30,12 @@ reticulate::virtualenv_install(
 
 ### 2. レンダリング時に EB の混入を遮断（恒久対策）
 Quarto の setup チャンク冒頭で、reticulate を触る前に実行：
-```r
+```{r}
 Sys.unsetenv("PYTHONPATH")
 ```
 
 ## 確認方法
-```r
+```{r}
 reticulate::py_run_string("import numpy; print(numpy.__version__, numpy.__file__)")
 # __file__ が .virtualenvs/r-saspy/... を指せばOK
 ```

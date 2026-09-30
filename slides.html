@@ -1048,6 +1048,997 @@ display: block;
 margin-left: auto;
 margin-right: 0; }
 </style>
+  <script>(function() {
+  // If window.HTMLWidgets is already defined, then use it; otherwise create a
+  // new object. This allows preceding code to set options that affect the
+  // initialization process (though none currently exist).
+  window.HTMLWidgets = window.HTMLWidgets || {};
+
+  // See if we're running in a viewer pane. If not, we're in a web browser.
+  var viewerMode = window.HTMLWidgets.viewerMode =
+      /\bviewer_pane=1\b/.test(window.location);
+
+  // See if we're running in Shiny mode. If not, it's a static document.
+  // Note that static widgets can appear in both Shiny and static modes, but
+  // obviously, Shiny widgets can only appear in Shiny apps/documents.
+  var shinyMode = window.HTMLWidgets.shinyMode =
+      typeof(window.Shiny) !== "undefined" && !!window.Shiny.outputBindings;
+
+  // We can't count on jQuery being available, so we implement our own
+  // version if necessary.
+  function querySelectorAll(scope, selector) {
+    if (typeof(jQuery) !== "undefined" && scope instanceof jQuery) {
+      return scope.find(selector);
+    }
+    if (scope.querySelectorAll) {
+      return scope.querySelectorAll(selector);
+    }
+  }
+
+  function asArray(value) {
+    if (value === null)
+      return [];
+    if ($.isArray(value))
+      return value;
+    return [value];
+  }
+
+  // Implement jQuery's extend
+  function extend(target /*, ... */) {
+    if (arguments.length == 1) {
+      return target;
+    }
+    for (var i = 1; i < arguments.length; i++) {
+      var source = arguments[i];
+      for (var prop in source) {
+        if (source.hasOwnProperty(prop)) {
+          target[prop] = source[prop];
+        }
+      }
+    }
+    return target;
+  }
+
+  // IE8 doesn't support Array.forEach.
+  function forEach(values, callback, thisArg) {
+    if (values.forEach) {
+      values.forEach(callback, thisArg);
+    } else {
+      for (var i = 0; i < values.length; i++) {
+        callback.call(thisArg, values[i], i, values);
+      }
+    }
+  }
+
+  // Replaces the specified method with the return value of funcSource.
+  //
+  // Note that funcSource should not BE the new method, it should be a function
+  // that RETURNS the new method. funcSource receives a single argument that is
+  // the overridden method, it can be called from the new method. The overridden
+  // method can be called like a regular function, it has the target permanently
+  // bound to it so "this" will work correctly.
+  function overrideMethod(target, methodName, funcSource) {
+    var superFunc = target[methodName] || function() {};
+    var superFuncBound = function() {
+      return superFunc.apply(target, arguments);
+    };
+    target[methodName] = funcSource(superFuncBound);
+  }
+
+  // Add a method to delegator that, when invoked, calls
+  // delegatee.methodName. If there is no such method on
+  // the delegatee, but there was one on delegator before
+  // delegateMethod was called, then the original version
+  // is invoked instead.
+  // For example:
+  //
+  // var a = {
+  //   method1: function() { console.log('a1'); }
+  //   method2: function() { console.log('a2'); }
+  // };
+  // var b = {
+  //   method1: function() { console.log('b1'); }
+  // };
+  // delegateMethod(a, b, "method1");
+  // delegateMethod(a, b, "method2");
+  // a.method1();
+  // a.method2();
+  //
+  // The output would be "b1", "a2".
+  function delegateMethod(delegator, delegatee, methodName) {
+    var inherited = delegator[methodName];
+    delegator[methodName] = function() {
+      var target = delegatee;
+      var method = delegatee[methodName];
+
+      // The method doesn't exist on the delegatee. Instead,
+      // call the method on the delegator, if it exists.
+      if (!method) {
+        target = delegator;
+        method = inherited;
+      }
+
+      if (method) {
+        return method.apply(target, arguments);
+      }
+    };
+  }
+
+  // Implement a vague facsimilie of jQuery's data method
+  function elementData(el, name, value) {
+    if (arguments.length == 2) {
+      return el["htmlwidget_data_" + name];
+    } else if (arguments.length == 3) {
+      el["htmlwidget_data_" + name] = value;
+      return el;
+    } else {
+      throw new Error("Wrong number of arguments for elementData: " +
+        arguments.length);
+    }
+  }
+
+  // http://stackoverflow.com/questions/3446170/escape-string-for-use-in-javascript-regex
+  function escapeRegExp(str) {
+    return str.replace(/[\-\[\]\/\{\}\(\)\*\+\?\.\\\^\$\|]/g, "\\$&");
+  }
+
+  function hasClass(el, className) {
+    var re = new RegExp("\\b" + escapeRegExp(className) + "\\b");
+    return re.test(el.className);
+  }
+
+  // elements - array (or array-like object) of HTML elements
+  // className - class name to test for
+  // include - if true, only return elements with given className;
+  //   if false, only return elements *without* given className
+  function filterByClass(elements, className, include) {
+    var results = [];
+    for (var i = 0; i < elements.length; i++) {
+      if (hasClass(elements[i], className) == include)
+        results.push(elements[i]);
+    }
+    return results;
+  }
+
+  function on(obj, eventName, func) {
+    if (obj.addEventListener) {
+      obj.addEventListener(eventName, func, false);
+    } else if (obj.attachEvent) {
+      obj.attachEvent(eventName, func);
+    }
+  }
+
+  function off(obj, eventName, func) {
+    if (obj.removeEventListener)
+      obj.removeEventListener(eventName, func, false);
+    else if (obj.detachEvent) {
+      obj.detachEvent(eventName, func);
+    }
+  }
+
+  // Translate array of values to top/right/bottom/left, as usual with
+  // the "padding" CSS property
+  // https://developer.mozilla.org/en-US/docs/Web/CSS/padding
+  function unpackPadding(value) {
+    if (typeof(value) === "number")
+      value = [value];
+    if (value.length === 1) {
+      return {top: value[0], right: value[0], bottom: value[0], left: value[0]};
+    }
+    if (value.length === 2) {
+      return {top: value[0], right: value[1], bottom: value[0], left: value[1]};
+    }
+    if (value.length === 3) {
+      return {top: value[0], right: value[1], bottom: value[2], left: value[1]};
+    }
+    if (value.length === 4) {
+      return {top: value[0], right: value[1], bottom: value[2], left: value[3]};
+    }
+  }
+
+  // Convert an unpacked padding object to a CSS value
+  function paddingToCss(paddingObj) {
+    return paddingObj.top + "px " + paddingObj.right + "px " + paddingObj.bottom + "px " + paddingObj.left + "px";
+  }
+
+  // Makes a number suitable for CSS
+  function px(x) {
+    if (typeof(x) === "number")
+      return x + "px";
+    else
+      return x;
+  }
+
+  // Retrieves runtime widget sizing information for an element.
+  // The return value is either null, or an object with fill, padding,
+  // defaultWidth, defaultHeight fields.
+  function sizingPolicy(el) {
+    var sizingEl = document.querySelector("script[data-for='" + el.id + "'][type='application/htmlwidget-sizing']");
+    if (!sizingEl)
+      return null;
+    var sp = JSON.parse(sizingEl.textContent || sizingEl.text || "{}");
+    if (viewerMode) {
+      return sp.viewer;
+    } else {
+      return sp.browser;
+    }
+  }
+
+  // @param tasks Array of strings (or falsy value, in which case no-op).
+  //   Each element must be a valid JavaScript expression that yields a
+  //   function. Or, can be an array of objects with "code" and "data"
+  //   properties; in this case, the "code" property should be a string
+  //   of JS that's an expr that yields a function, and "data" should be
+  //   an object that will be added as an additional argument when that
+  //   function is called.
+  // @param target The object that will be "this" for each function
+  //   execution.
+  // @param args Array of arguments to be passed to the functions. (The
+  //   same arguments will be passed to all functions.)
+  function evalAndRun(tasks, target, args) {
+    if (tasks) {
+      forEach(tasks, function(task) {
+        var theseArgs = args;
+        if (typeof(task) === "object") {
+          theseArgs = theseArgs.concat([task.data]);
+          task = task.code;
+        }
+        var taskFunc = tryEval(task);
+        if (typeof(taskFunc) !== "function") {
+          throw new Error("Task must be a function! Source:\n" + task);
+        }
+        taskFunc.apply(target, theseArgs);
+      });
+    }
+  }
+
+  // Attempt eval() both with and without enclosing in parentheses.
+  // Note that enclosing coerces a function declaration into
+  // an expression that eval() can parse
+  // (otherwise, a SyntaxError is thrown)
+  function tryEval(code) {
+    var result = null;
+    try {
+      result = eval("(" + code + ")");
+    } catch(error) {
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+      try {
+        result = eval(code);
+      } catch(e) {
+        if (e instanceof SyntaxError) {
+          throw error;
+        } else {
+          throw e;
+        }
+      }
+    }
+    return result;
+  }
+
+  function initSizing(el) {
+    var sizing = sizingPolicy(el);
+    if (!sizing)
+      return;
+
+    var cel = document.getElementById("htmlwidget_container");
+    if (!cel)
+      return;
+
+    if (typeof(sizing.padding) !== "undefined") {
+      document.body.style.margin = "0";
+      document.body.style.padding = paddingToCss(unpackPadding(sizing.padding));
+    }
+
+    if (sizing.fill) {
+      document.body.style.overflow = "hidden";
+      document.body.style.width = "100%";
+      document.body.style.height = "100%";
+      document.documentElement.style.width = "100%";
+      document.documentElement.style.height = "100%";
+      cel.style.position = "absolute";
+      var pad = unpackPadding(sizing.padding);
+      cel.style.top = pad.top + "px";
+      cel.style.right = pad.right + "px";
+      cel.style.bottom = pad.bottom + "px";
+      cel.style.left = pad.left + "px";
+      el.style.width = "100%";
+      el.style.height = "100%";
+
+      return {
+        getWidth: function() { return cel.getBoundingClientRect().width; },
+        getHeight: function() { return cel.getBoundingClientRect().height; }
+      };
+
+    } else {
+      el.style.width = px(sizing.width);
+      el.style.height = px(sizing.height);
+
+      return {
+        getWidth: function() { return cel.getBoundingClientRect().width; },
+        getHeight: function() { return cel.getBoundingClientRect().height; }
+      };
+    }
+  }
+
+  // Default implementations for methods
+  var defaults = {
+    find: function(scope) {
+      return querySelectorAll(scope, "." + this.name);
+    },
+    renderError: function(el, err) {
+      var $el = $(el);
+
+      this.clearError(el);
+
+      // Add all these error classes, as Shiny does
+      var errClass = "shiny-output-error";
+      if (err.type !== null) {
+        // use the classes of the error condition as CSS class names
+        errClass = errClass + " " + $.map(asArray(err.type), function(type) {
+          return errClass + "-" + type;
+        }).join(" ");
+      }
+      errClass = errClass + " htmlwidgets-error";
+
+      // Is el inline or block? If inline or inline-block, just display:none it
+      // and add an inline error.
+      var display = $el.css("display");
+      $el.data("restore-display-mode", display);
+
+      if (display === "inline" || display === "inline-block") {
+        $el.hide();
+        if (err.message !== "") {
+          var errorSpan = $("<span>").addClass(errClass);
+          errorSpan.text(err.message);
+          $el.after(errorSpan);
+        }
+      } else if (display === "block") {
+        // If block, add an error just after the el, set visibility:none on the
+        // el, and position the error to be on top of the el.
+        // Mark it with a unique ID and CSS class so we can remove it later.
+        $el.css("visibility", "hidden");
+        if (err.message !== "") {
+          var errorDiv = $("<div>").addClass(errClass).css("position", "absolute")
+            .css("top", el.offsetTop)
+            .css("left", el.offsetLeft)
+            // setting width can push out the page size, forcing otherwise
+            // unnecessary scrollbars to appear and making it impossible for
+            // the element to shrink; so use max-width instead
+            .css("maxWidth", el.offsetWidth)
+            .css("height", el.offsetHeight);
+          errorDiv.text(err.message);
+          $el.after(errorDiv);
+
+          // Really dumb way to keep the size/position of the error in sync with
+          // the parent element as the window is resized or whatever.
+          var intId = setInterval(function() {
+            if (!errorDiv[0].parentElement) {
+              clearInterval(intId);
+              return;
+            }
+            errorDiv
+              .css("top", el.offsetTop)
+              .css("left", el.offsetLeft)
+              .css("maxWidth", el.offsetWidth)
+              .css("height", el.offsetHeight);
+          }, 500);
+        }
+      }
+    },
+    clearError: function(el) {
+      var $el = $(el);
+      var display = $el.data("restore-display-mode");
+      $el.data("restore-display-mode", null);
+
+      if (display === "inline" || display === "inline-block") {
+        if (display)
+          $el.css("display", display);
+        $(el.nextSibling).filter(".htmlwidgets-error").remove();
+      } else if (display === "block"){
+        $el.css("visibility", "inherit");
+        $(el.nextSibling).filter(".htmlwidgets-error").remove();
+      }
+    },
+    sizing: {}
+  };
+
+  // Called by widget bindings to register a new type of widget. The definition
+  // object can contain the following properties:
+  // - name (required) - A string indicating the binding name, which will be
+  //   used by default as the CSS classname to look for.
+  // - initialize (optional) - A function(el) that will be called once per
+  //   widget element; if a value is returned, it will be passed as the third
+  //   value to renderValue.
+  // - renderValue (required) - A function(el, data, initValue) that will be
+  //   called with data. Static contexts will cause this to be called once per
+  //   element; Shiny apps will cause this to be called multiple times per
+  //   element, as the data changes.
+  window.HTMLWidgets.widget = function(definition) {
+    if (!definition.name) {
+      throw new Error("Widget must have a name");
+    }
+    if (!definition.type) {
+      throw new Error("Widget must have a type");
+    }
+    // Currently we only support output widgets
+    if (definition.type !== "output") {
+      throw new Error("Unrecognized widget type '" + definition.type + "'");
+    }
+    // TODO: Verify that .name is a valid CSS classname
+
+    // Support new-style instance-bound definitions. Old-style class-bound
+    // definitions have one widget "object" per widget per type/class of
+    // widget; the renderValue and resize methods on such widget objects
+    // take el and instance arguments, because the widget object can't
+    // store them. New-style instance-bound definitions have one widget
+    // object per widget instance; the definition that's passed in doesn't
+    // provide renderValue or resize methods at all, just the single method
+    //   factory(el, width, height)
+    // which returns an object that has renderValue(x) and resize(w, h).
+    // This enables a far more natural programming style for the widget
+    // author, who can store per-instance state using either OO-style
+    // instance fields or functional-style closure variables (I guess this
+    // is in contrast to what can only be called C-style pseudo-OO which is
+    // what we required before).
+    if (definition.factory) {
+      definition = createLegacyDefinitionAdapter(definition);
+    }
+
+    if (!definition.renderValue) {
+      throw new Error("Widget must have a renderValue function");
+    }
+
+    // For static rendering (non-Shiny), use a simple widget registration
+    // scheme. We also use this scheme for Shiny apps/documents that also
+    // contain static widgets.
+    window.HTMLWidgets.widgets = window.HTMLWidgets.widgets || [];
+    // Merge defaults into the definition; don't mutate the original definition.
+    var staticBinding = extend({}, defaults, definition);
+    overrideMethod(staticBinding, "find", function(superfunc) {
+      return function(scope) {
+        var results = superfunc(scope);
+        // Filter out Shiny outputs, we only want the static kind
+        return filterByClass(results, "html-widget-output", false);
+      };
+    });
+    window.HTMLWidgets.widgets.push(staticBinding);
+
+    if (shinyMode) {
+      // Shiny is running. Register the definition with an output binding.
+      // The definition itself will not be the output binding, instead
+      // we will make an output binding object that delegates to the
+      // definition. This is because we foolishly used the same method
+      // name (renderValue) for htmlwidgets definition and Shiny bindings
+      // but they actually have quite different semantics (the Shiny
+      // bindings receive data that includes lots of metadata that it
+      // strips off before calling htmlwidgets renderValue). We can't
+      // just ignore the difference because in some widgets it's helpful
+      // to call this.renderValue() from inside of resize(), and if
+      // we're not delegating, then that call will go to the Shiny
+      // version instead of the htmlwidgets version.
+
+      // Merge defaults with definition, without mutating either.
+      var bindingDef = extend({}, defaults, definition);
+
+      // This object will be our actual Shiny binding.
+      var shinyBinding = new Shiny.OutputBinding();
+
+      // With a few exceptions, we'll want to simply use the bindingDef's
+      // version of methods if they are available, otherwise fall back to
+      // Shiny's defaults. NOTE: If Shiny's output bindings gain additional
+      // methods in the future, and we want them to be overrideable by
+      // HTMLWidget binding definitions, then we'll need to add them to this
+      // list.
+      delegateMethod(shinyBinding, bindingDef, "getId");
+      delegateMethod(shinyBinding, bindingDef, "onValueChange");
+      delegateMethod(shinyBinding, bindingDef, "onValueError");
+      delegateMethod(shinyBinding, bindingDef, "renderError");
+      delegateMethod(shinyBinding, bindingDef, "clearError");
+      delegateMethod(shinyBinding, bindingDef, "showProgress");
+
+      // The find, renderValue, and resize are handled differently, because we
+      // want to actually decorate the behavior of the bindingDef methods.
+
+      shinyBinding.find = function(scope) {
+        var results = bindingDef.find(scope);
+
+        // Only return elements that are Shiny outputs, not static ones
+        var dynamicResults = results.filter(".html-widget-output");
+
+        // It's possible that whatever caused Shiny to think there might be
+        // new dynamic outputs, also caused there to be new static outputs.
+        // Since there might be lots of different htmlwidgets bindings, we
+        // schedule execution for later--no need to staticRender multiple
+        // times.
+        if (results.length !== dynamicResults.length)
+          scheduleStaticRender();
+
+        return dynamicResults;
+      };
+
+      // Wrap renderValue to handle initialization, which unfortunately isn't
+      // supported natively by Shiny at the time of this writing.
+
+      shinyBinding.renderValue = function(el, data) {
+        Shiny.renderDependencies(data.deps);
+        // Resolve strings marked as javascript literals to objects
+        if (!(data.evals instanceof Array)) data.evals = [data.evals];
+        for (var i = 0; data.evals && i < data.evals.length; i++) {
+          window.HTMLWidgets.evaluateStringMember(data.x, data.evals[i]);
+        }
+        if (!bindingDef.renderOnNullValue) {
+          if (data.x === null) {
+            el.style.visibility = "hidden";
+            return;
+          } else {
+            el.style.visibility = "inherit";
+          }
+        }
+        if (!elementData(el, "initialized")) {
+          initSizing(el);
+
+          elementData(el, "initialized", true);
+          if (bindingDef.initialize) {
+            var rect = el.getBoundingClientRect();
+            var result = bindingDef.initialize(el, rect.width, rect.height);
+            elementData(el, "init_result", result);
+          }
+        }
+        bindingDef.renderValue(el, data.x, elementData(el, "init_result"));
+        evalAndRun(data.jsHooks.render, elementData(el, "init_result"), [el, data.x]);
+      };
+
+      // Only override resize if bindingDef implements it
+      if (bindingDef.resize) {
+        shinyBinding.resize = function(el, width, height) {
+          // Shiny can call resize before initialize/renderValue have been
+          // called, which doesn't make sense for widgets.
+          if (elementData(el, "initialized")) {
+            bindingDef.resize(el, width, height, elementData(el, "init_result"));
+          }
+        };
+      }
+
+      Shiny.outputBindings.register(shinyBinding, bindingDef.name);
+    }
+  };
+
+  var scheduleStaticRenderTimerId = null;
+  function scheduleStaticRender() {
+    if (!scheduleStaticRenderTimerId) {
+      scheduleStaticRenderTimerId = setTimeout(function() {
+        scheduleStaticRenderTimerId = null;
+        window.HTMLWidgets.staticRender();
+      }, 1);
+    }
+  }
+
+  // Render static widgets after the document finishes loading
+  // Statically render all elements that are of this widget's class
+  window.HTMLWidgets.staticRender = function() {
+    var bindings = window.HTMLWidgets.widgets || [];
+    forEach(bindings, function(binding) {
+      var matches = binding.find(document.documentElement);
+      forEach(matches, function(el) {
+        var sizeObj = initSizing(el, binding);
+
+        var getSize = function(el) {
+          if (sizeObj) {
+            return {w: sizeObj.getWidth(), h: sizeObj.getHeight()}
+          } else {
+            var rect = el.getBoundingClientRect();
+            return {w: rect.width, h: rect.height}
+          }
+        };
+
+        if (hasClass(el, "html-widget-static-bound"))
+          return;
+        el.className = el.className + " html-widget-static-bound";
+
+        var initResult;
+        if (binding.initialize) {
+          var size = getSize(el);
+          initResult = binding.initialize(el, size.w, size.h);
+          elementData(el, "init_result", initResult);
+        }
+
+        if (binding.resize) {
+          var lastSize = getSize(el);
+          var resizeHandler = function(e) {
+            var size = getSize(el);
+            if (size.w === 0 && size.h === 0)
+              return;
+            if (size.w === lastSize.w && size.h === lastSize.h)
+              return;
+            lastSize = size;
+            binding.resize(el, size.w, size.h, initResult);
+          };
+
+          on(window, "resize", resizeHandler);
+
+          // This is needed for cases where we're running in a Shiny
+          // app, but the widget itself is not a Shiny output, but
+          // rather a simple static widget. One example of this is
+          // an rmarkdown document that has runtime:shiny and widget
+          // that isn't in a render function. Shiny only knows to
+          // call resize handlers for Shiny outputs, not for static
+          // widgets, so we do it ourselves.
+          if (window.jQuery) {
+            window.jQuery(document).on(
+              "shown.htmlwidgets shown.bs.tab.htmlwidgets shown.bs.collapse.htmlwidgets",
+              resizeHandler
+            );
+            window.jQuery(document).on(
+              "hidden.htmlwidgets hidden.bs.tab.htmlwidgets hidden.bs.collapse.htmlwidgets",
+              resizeHandler
+            );
+          }
+
+          // This is needed for the specific case of ioslides, which
+          // flips slides between display:none and display:block.
+          // Ideally we would not have to have ioslide-specific code
+          // here, but rather have ioslides raise a generic event,
+          // but the rmarkdown package just went to CRAN so the
+          // window to getting that fixed may be long.
+          if (window.addEventListener) {
+            // It's OK to limit this to window.addEventListener
+            // browsers because ioslides itself only supports
+            // such browsers.
+            on(document, "slideenter", resizeHandler);
+            on(document, "slideleave", resizeHandler);
+          }
+        }
+
+        var scriptData = document.querySelector("script[data-for='" + el.id + "'][type='application/json']");
+        if (scriptData) {
+          var data = JSON.parse(scriptData.textContent || scriptData.text);
+          // Resolve strings marked as javascript literals to objects
+          if (!(data.evals instanceof Array)) data.evals = [data.evals];
+          for (var k = 0; data.evals && k < data.evals.length; k++) {
+            window.HTMLWidgets.evaluateStringMember(data.x, data.evals[k]);
+          }
+          binding.renderValue(el, data.x, initResult);
+          evalAndRun(data.jsHooks.render, initResult, [el, data.x]);
+        }
+      });
+    });
+
+    invokePostRenderHandlers();
+  }
+
+
+  function has_jQuery3() {
+    if (!window.jQuery) {
+      return false;
+    }
+    var $version = window.jQuery.fn.jquery;
+    var $major_version = parseInt($version.split(".")[0]);
+    return $major_version >= 3;
+  }
+
+  /*
+  / Shiny 1.4 bumped jQuery from 1.x to 3.x which means jQuery's
+  / on-ready handler (i.e., $(fn)) is now asyncronous (i.e., it now
+  / really means $(setTimeout(fn)).
+  / https://jquery.com/upgrade-guide/3.0/#breaking-change-document-ready-handlers-are-now-asynchronous
+  /
+  / Since Shiny uses $() to schedule initShiny, shiny>=1.4 calls initShiny
+  / one tick later than it did before, which means staticRender() is
+  / called renderValue() earlier than (advanced) widget authors might be expecting.
+  / https://github.com/rstudio/shiny/issues/2630
+  /
+  / For a concrete example, leaflet has some methods (e.g., updateBounds)
+  / which reference Shiny methods registered in initShiny (e.g., setInputValue).
+  / Since leaflet is privy to this life-cycle, it knows to use setTimeout() to
+  / delay execution of those methods (until Shiny methods are ready)
+  / https://github.com/rstudio/leaflet/blob/18ec981/javascript/src/index.js#L266-L268
+  /
+  / Ideally widget authors wouldn't need to use this setTimeout() hack that
+  / leaflet uses to call Shiny methods on a staticRender(). In the long run,
+  / the logic initShiny should be broken up so that method registration happens
+  / right away, but binding happens later.
+  */
+  function maybeStaticRenderLater() {
+    if (shinyMode && has_jQuery3()) {
+      window.jQuery(window.HTMLWidgets.staticRender);
+    } else {
+      window.HTMLWidgets.staticRender();
+    }
+  }
+
+  if (document.addEventListener) {
+    document.addEventListener("DOMContentLoaded", function() {
+      document.removeEventListener("DOMContentLoaded", arguments.callee, false);
+      maybeStaticRenderLater();
+    }, false);
+  } else if (document.attachEvent) {
+    document.attachEvent("onreadystatechange", function() {
+      if (document.readyState === "complete") {
+        document.detachEvent("onreadystatechange", arguments.callee);
+        maybeStaticRenderLater();
+      }
+    });
+  }
+
+
+  window.HTMLWidgets.getAttachmentUrl = function(depname, key) {
+    // If no key, default to the first item
+    if (typeof(key) === "undefined")
+      key = 1;
+
+    var link = document.getElementById(depname + "-" + key + "-attachment");
+    if (!link) {
+      throw new Error("Attachment " + depname + "/" + key + " not found in document");
+    }
+    return link.getAttribute("href");
+  };
+
+  window.HTMLWidgets.dataframeToD3 = function(df) {
+    var names = [];
+    var length;
+    for (var name in df) {
+        if (df.hasOwnProperty(name))
+            names.push(name);
+        if (typeof(df[name]) !== "object" || typeof(df[name].length) === "undefined") {
+            throw new Error("All fields must be arrays");
+        } else if (typeof(length) !== "undefined" && length !== df[name].length) {
+            throw new Error("All fields must be arrays of the same length");
+        }
+        length = df[name].length;
+    }
+    var results = [];
+    var item;
+    for (var row = 0; row < length; row++) {
+        item = {};
+        for (var col = 0; col < names.length; col++) {
+            item[names[col]] = df[names[col]][row];
+        }
+        results.push(item);
+    }
+    return results;
+  };
+
+  window.HTMLWidgets.transposeArray2D = function(array) {
+      if (array.length === 0) return array;
+      var newArray = array[0].map(function(col, i) {
+          return array.map(function(row) {
+              return row[i]
+          })
+      });
+      return newArray;
+  };
+  // Split value at splitChar, but allow splitChar to be escaped
+  // using escapeChar. Any other characters escaped by escapeChar
+  // will be included as usual (including escapeChar itself).
+  function splitWithEscape(value, splitChar, escapeChar) {
+    var results = [];
+    var escapeMode = false;
+    var currentResult = "";
+    for (var pos = 0; pos < value.length; pos++) {
+      if (!escapeMode) {
+        if (value[pos] === splitChar) {
+          results.push(currentResult);
+          currentResult = "";
+        } else if (value[pos] === escapeChar) {
+          escapeMode = true;
+        } else {
+          currentResult += value[pos];
+        }
+      } else {
+        currentResult += value[pos];
+        escapeMode = false;
+      }
+    }
+    if (currentResult !== "") {
+      results.push(currentResult);
+    }
+    return results;
+  }
+  // Function authored by Yihui/JJ Allaire
+  window.HTMLWidgets.evaluateStringMember = function(o, member) {
+    var parts = splitWithEscape(member, '.', '\\');
+    for (var i = 0, l = parts.length; i < l; i++) {
+      var part = parts[i];
+      // part may be a character or 'numeric' member name
+      if (o !== null && typeof o === "object" && part in o) {
+        if (i == (l - 1)) { // if we are at the end of the line then evalulate
+          if (typeof o[part] === "string")
+            o[part] = tryEval(o[part]);
+        } else { // otherwise continue to next embedded object
+          o = o[part];
+        }
+      }
+    }
+  };
+
+  // Retrieve the HTMLWidget instance (i.e. the return value of an
+  // HTMLWidget binding's initialize() or factory() function)
+  // associated with an element, or null if none.
+  window.HTMLWidgets.getInstance = function(el) {
+    return elementData(el, "init_result");
+  };
+
+  // Finds the first element in the scope that matches the selector,
+  // and returns the HTMLWidget instance (i.e. the return value of
+  // an HTMLWidget binding's initialize() or factory() function)
+  // associated with that element, if any. If no element matches the
+  // selector, or the first matching element has no HTMLWidget
+  // instance associated with it, then null is returned.
+  //
+  // The scope argument is optional, and defaults to window.document.
+  window.HTMLWidgets.find = function(scope, selector) {
+    if (arguments.length == 1) {
+      selector = scope;
+      scope = document;
+    }
+
+    var el = scope.querySelector(selector);
+    if (el === null) {
+      return null;
+    } else {
+      return window.HTMLWidgets.getInstance(el);
+    }
+  };
+
+  // Finds all elements in the scope that match the selector, and
+  // returns the HTMLWidget instances (i.e. the return values of
+  // an HTMLWidget binding's initialize() or factory() function)
+  // associated with the elements, in an array. If elements that
+  // match the selector don't have an associated HTMLWidget
+  // instance, the returned array will contain nulls.
+  //
+  // The scope argument is optional, and defaults to window.document.
+  window.HTMLWidgets.findAll = function(scope, selector) {
+    if (arguments.length == 1) {
+      selector = scope;
+      scope = document;
+    }
+
+    var nodes = scope.querySelectorAll(selector);
+    var results = [];
+    for (var i = 0; i < nodes.length; i++) {
+      results.push(window.HTMLWidgets.getInstance(nodes[i]));
+    }
+    return results;
+  };
+
+  var postRenderHandlers = [];
+  function invokePostRenderHandlers() {
+    while (postRenderHandlers.length) {
+      var handler = postRenderHandlers.shift();
+      if (handler) {
+        handler();
+      }
+    }
+  }
+
+  // Register the given callback function to be invoked after the
+  // next time static widgets are rendered.
+  window.HTMLWidgets.addPostRenderHandler = function(callback) {
+    postRenderHandlers.push(callback);
+  };
+
+  // Takes a new-style instance-bound definition, and returns an
+  // old-style class-bound definition. This saves us from having
+  // to rewrite all the logic in this file to accomodate both
+  // types of definitions.
+  function createLegacyDefinitionAdapter(defn) {
+    var result = {
+      name: defn.name,
+      type: defn.type,
+      initialize: function(el, width, height) {
+        return defn.factory(el, width, height);
+      },
+      renderValue: function(el, x, instance) {
+        return instance.renderValue(x);
+      },
+      resize: function(el, width, height, instance) {
+        return instance.resize(width, height);
+      }
+    };
+
+    if (defn.find)
+      result.find = defn.find;
+    if (defn.renderError)
+      result.renderError = defn.renderError;
+    if (defn.clearError)
+      result.clearError = defn.clearError;
+
+    return result;
+  }
+})();
+</script>
+  <script>function adjustIframeHeight(iframe) {
+    const iframeDocument = iframe.contentDocument || iframe.contentWindow.document;
+    if (!iframeDocument) return;
+
+    // Temporarily force horizontal scroll to measure its size
+    const hasHorizontalScroll = iframeDocument.documentElement.scrollWidth > iframeDocument.documentElement.clientWidth;
+    const scrollbarHeight = hasHorizontalScroll ? 17 : 0; // Approx height of horizontal scrollbar
+
+    // Adjust height to content's scrollHeight minus scrollbar if needed
+    iframe.style.height = (iframeDocument.documentElement.scrollHeight + scrollbarHeight) + 'px';
+}
+
+function adjustAllIframes() {
+    document.querySelectorAll('.resizable-iframe').forEach((iframe) => {
+        adjustIframeHeight(iframe);
+    });
+}
+
+// Adjust height when iframe is loaded
+document.querySelectorAll('.resizable-iframe').forEach((iframe) => {
+    iframe.addEventListener('load', () => adjustIframeHeight(iframe));
+});
+
+// Re-adjust on window resize
+window.addEventListener('resize', adjustAllIframes);
+window.addEventListener('load', adjustAllIframes);
+</script>
+  <script>HTMLWidgets.widget({
+
+  name: 'sas_widget',
+
+  type: 'output',
+
+  factory: function (el, width, height) {
+
+    return {
+
+      renderValue: function (x) {
+        let lst = x.lst;
+        let log = x.log;
+        let capture = x.capture;
+
+        let id_prefix = el.id;
+
+        if (capture == "both") {
+          el.innerHTML = `
+            <style>
+            body {
+              overflow: auto !important;
+            }
+            /* Force non-active tabs to hide even if the template uses flexbox */
+            #${id_prefix}-myTabContent .tab-pane:not(.active) {
+              display: none !important;
+            }
+            </style>
+            <ul class="nav nav-tabs" id="${id_prefix}-myTab" role="tablist">
+              <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="${id_prefix}-lst-tab" data-bs-toggle="tab" data-bs-target="#${id_prefix}-lst" type="button" role="tab" aria-controls="${id_prefix}-lst" aria-selected="true">Listing</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" id="${id_prefix}-log-tab" data-bs-toggle="tab" data-bs-target="#${id_prefix}-log" type="button" role="tab" aria-controls="${id_prefix}-log" aria-selected="false">Log</button>
+              </li>
+            </ul>
+            <div style = "display: inline-block; width: 100%" class="tab-content" id="${id_prefix}-myTabContent">
+              <div style = "height: 100% !important" class="tab-pane fade show active" id="${id_prefix}-lst" role="tabpanel" aria-labelledby="${id_prefix}-lst-tab">
+                <iframe width = '100%' class='resizable-iframe' srcdoc = '${lst}<style>table {margin-left: auto; margin-right: auto;}</style>'></iframe>
+              </div>
+              <div style = "height: 100% !important" class="tab-pane fade" id="${id_prefix}-log" role="tabpanel" aria-labelledby="${id_prefix}-log-tab"><pre>${log}</pre></div>
+            </div>
+          `;
+        } else if (capture == "listing") {
+          el.innerHTML = `
+            <iframe width = '100%' class='resizable-iframe' srcdoc = '${lst}<style>table {margin-left: auto; margin-right: auto;}</style>'></iframe>
+          `;
+        } else if (capture == "log") {
+          el.innerHTML = `
+            <pre>${log}</pre>
+          `;
+        }
+
+      },
+
+      resize: function (width, height) {
+
+      }
+
+    };
+  }
+});</script>
 </head>
 <body class="quarto-light">
   <div class="reveal">
@@ -1101,7 +2092,7 @@ Markdownにおける複数言語の利用はコード実行や管理を複雑化
 </div>
 </div>
 <blockquote>
-<p>本発表では、RとSASを連携する技術の変遷を概観し、<br>
+<p>本発表では、RとSASを連携してレポーティングする技術を概観し、<br>
 <strong>両言語を両立したレポーティング手法</strong>を整理することを目的とする。</p>
 </blockquote>
 </section>
@@ -1153,6 +2144,7 @@ Markdownにおける複数言語の利用はコード実行や管理を複雑化
 <li>Quartoは{knitr}のエンジン経由で、<code>{sas}</code>コードブロックを実行できる</li>
 <li>RチャンクとSASチャンクを使い分けることで、<strong>同一ドキュメント内</strong>に記述できる。</li>
 <li>ただし、内部で<strong>ローカルのSAS</strong>を呼び出すため、Rと同じマシンにSASがインストールされている必要がある</li>
+<li><a href="#/set-quart">Link: Quarto SASのSetup方法</a></li>
 </ul>
 </section>
 <section id="rチャンク" class="slide level2">
@@ -1163,7 +2155,7 @@ Markdownにおける複数言語の利用はコード実行や管理を複雑化
 <span id="cb3-3"><a href></a><span class="fu">mean</span>(x)</span>
 <span id="cb3-4"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>[1] 0.2493012</code></pre>
+<pre><code>[1] -0.3482637</code></pre>
 </div>
 </div>
 </section>
@@ -1204,6 +2196,7 @@ Markdownにおける複数言語の利用はコード実行や管理を複雑化
 <li>Doug Hemken氏による<strong>Rパッケージ</strong>。</li>
 <li>knitrのSAS言語エンジンを<strong>拡張</strong>し、実行のみ/ログ出力/HTML出力を簡便に切り替えることができる</li>
 <li>Quarto単体と同様に<strong>ローカルのSAS</strong>を呼び出す必要がある。</li>
+<li><a href="#/set-SASmarkdown">Link: SASmarkdownのSetup方法</a></li>
 </ul>
 <blockquote>
 <p>Quarto単体の標準では出力できないlogを出力可能</p>
@@ -1221,7 +2214,7 @@ Markdownにおける複数言語の利用はコード実行や管理を複雑化
 <span id="cb7-7"><a href></a><span class="in">NOTE: The PROCEDURE MEANS printed page 1.</span></span>
 <span id="cb7-8"><a href></a><span class="in">NOTE: PROCEDURE MEANS used (Total process time):</span></span>
 <span id="cb7-9"><a href></a><span class="in">      real time           0.03 seconds</span></span>
-<span id="cb7-10"><a href></a><span class="in">      cpu time            0.02 seconds</span></span>
+<span id="cb7-10"><a href></a><span class="in">      cpu time            0.03 seconds</span></span>
 <span id="cb7-11"><a href></a><span class="in">      </span></span>
 <span id="cb7-12"><a href></a></span>
 <span id="cb7-13"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
@@ -1258,82 +2251,49 @@ Markdownにおける複数言語の利用はコード実行や管理を複雑化
 <li><strong>SASPy</strong>（Python）＋ <strong>reticulate</strong>経由でSASセッションと連携する</li>
 <li><strong>SAS OnDemand for Academics (ODA)</strong>をはじめとする<strong>リモートSAS</strong>にも接続可能</li>
 <li><code>sas_from_r()</code> / <code>sas_to_r()</code>で<strong>RとSAS間のデータ受け渡し</strong>が容易</li>
+<li>環境設定の方法が多少煩雑。<a href="#/set-sasquatch">Link: sasquatchの設定方法</a></li>
 </ul>
-<p>以下は初期設定のためのCodeであり、Quarto documentに含める必要は無い</p>
-<div class="cell">
-<div class="sourceCode cell-code" id="cb9"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb9-1"><a href></a><span class="in">```{r}</span></span>
-<span id="cb9-2"><a href></a><span class="co">#| eval: false</span></span>
-<span id="cb9-3"><a href></a><span class="fu">library</span>(sasquatch)</span>
-<span id="cb9-4"><a href></a>sasquatch<span class="sc">::</span><span class="fu">install_saspy</span>() </span>
-<span id="cb9-5"><a href></a>sasquatch<span class="sc">::</span><span class="fu">configure_saspy</span>()</span>
-<span id="cb9-6"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
-</div>
-<p>以下のような<code>.py</code> fileを設定することが必要。こちらもdocumentには不要</p>
-<div class="cell">
-<div class="sourceCode cell-code" id="cb10"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb10-1"><a href></a><span class="in">```{python}</span></span>
-<span id="cb10-2"><a href></a><span class="co">#| eval: false</span></span>
-<span id="cb10-3"><a href></a>SAS_config_names <span class="op">=</span> [<span class="st">&#39;config_name&#39;</span>]</span>
-<span id="cb10-4"><a href></a>config_name <span class="op">=</span> {</span>
-<span id="cb10-5"><a href></a>  <span class="st">&#39;saspath&#39;</span>: <span class="st">&#39;/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas&#39;</span></span>
-<span id="cb10-6"><a href></a>}</span>
-<span id="cb10-7"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
-</div>
 </section>
 <section id="sasquatchによるsasチャンク" class="slide level2">
 <h2>sasquatchによるSASチャンク</h2>
-<div class="cell">
-<div class="cell-output cell-output-error">
-<pre><code>Error in `sas_connect()`:
-! `cfgname` must specify an existing configuration.
-✖ `&quot;config_name&quot; cannot be found.
-ℹ Available configurations include: &quot;default&quot;</code></pre>
-</div>
-</div>
-<div class="cell">
-<div class="sourceCode cell-code" id="cb12"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb12-1"><a href></a><span class="in">```{sas}</span></span>
-<span id="cb12-2"><a href></a><span class="in">*| echo: fenced;</span></span>
-<span id="cb12-3"><a href></a><span class="in">*| capture: listing;</span></span>
-<span id="cb12-4"><a href></a><span class="in">*| cache: false;</span></span>
-<span id="cb12-5"><a href></a><span class="in">proc means data=sashelp.cars;</span></span>
-<span id="cb12-6"><a href></a><span class="in">  var mpg_city mpg_highway;</span></span>
-<span id="cb12-7"><a href></a><span class="in">run;</span></span>
-<span id="cb12-8"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<div class="cell-output cell-output-error">
-<pre><code>Error in `sasquatch::sas_run_string()`:
-✖ No active SAS connection.
-ℹ Use `sasquatch::sas_connect()` to start a new SAS session.</code></pre>
+<div class="cell" data-capture="log">
+<div class="sourceCode cell-code" id="cb9"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb9-1"><a href></a><span class="in">```{sas, capture=&quot;log&quot;}</span></span>
+<span id="cb9-2"><a href></a><span class="in">*| echo: fenced;</span></span>
+<span id="cb9-3"><a href></a><span class="in">*| cache: false;</span></span>
+<span id="cb9-4"><a href></a><span class="in">proc means data=sashelp.cars;</span></span>
+<span id="cb9-5"><a href></a><span class="in">  var mpg_city mpg_highway;</span></span>
+<span id="cb9-6"><a href></a><span class="in">run;</span></span>
+<span id="cb9-7"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div id="htmlwidget-53c2222bd250c2ed6140" style="width:960px;height:auto;" class="sas_widget html-widget"></div>
+<script type="application/json" data-for="htmlwidget-53c2222bd250c2ed6140">{"x":{"lst":"<!DOCTYPE html>\n<html lang=\"en\" xml:lang=\"en\" xmlns=\"http://www.w3.org/1999/xhtml\">\n<head>\n<meta charset=\"utf-8\"/>\n<meta content=\"SAS 9.4\" name=\"generator\"/>\n<title>SAS Output<\/title>\n<style>\n/*<![CDATA[*/\n.body.c > table, .body.c > pre, .body.c div > table,\n.body.c div > pre, .body.c > table, .body.c > pre,\n.body.j > table, .body.j > pre, .body.j div > table,\n.body.j div > pre, .body.j > table, .body.j > pre,\n.body.c p.note, .body.c p.warning, .body.c p.error, .body.c p.fatal,\n.body.j p.note, .body.j p.warning, .body.j p.error, .body.j p.fatal,\n.body.c > table.layoutcontainer, .body.j > table.layoutcontainer { margin-left: auto; margin-right: auto }\n.layoutregion.l table, .layoutregion.l pre, .layoutregion.l p.note,\n.layoutregion.l p.warning, .layoutregion.l p.error, .layoutregion.l p.fatal { margin-left: 0 }\n.layoutregion.c table, .layoutregion.c pre, .layoutregion.c p.note,\n.layoutregion.c p.warning, .layoutregion.c p.error, .layoutregion.c p.fatal { margin-left: auto; margin-right: auto }\n.layoutregion.r table, .layoutregion.r pre, .layoutregion.r p.note,\n.layoutregion.r table, .layoutregion.r pre, .layoutregion.r p.note,\n.layoutregion.r p.warning, .layoutregion.r p.error, .layoutregion.r p.fatal { margin-right: 0 }\narticle, aside, details, figcaption, figure, footer, header, hgroup, nav, section { display: block }\nhtml{ font-size: 100% }\n.body { margin: 1em; font-size: 13px; line-height: 1.231 }\nsup { position: relative; vertical-align: baseline; bottom: 0.25em; font-size: 0.8em }\nsub { position: relative; vertical-align: baseline; top: 0.25em; font-size: 0.8em }\nul, ol { margin: 1em 0; padding: 0 0 0 40px }\ndd { margin: 0 0 0 40px }\nnav ul, nav ol { list-style: none; list-style-image: none; margin: 0; padding: 0 }\nimg { border: 0; vertical-align: middle }\nsvg:not(:root) { overflow: hidden }\nfigure { margin: 0 }\ntable { border-collapse: collapse; border-spacing: 0 }\n.layoutcontainer { border-collapse: separate; border-spacing: 0 }\np { margin-top: 0; text-align: left }\nh1.heading1 { text-align: left }\nh2.heading2 { text-align: left }\nh3.heading3 { text-align: left }\nh4.heading4 { text-align: left }\nh5.heading5 { text-align: left }\nh6.heading6 { text-align: left }\nspan { text-align: left }\ntable { margin-bottom: 1em }\ntd, th { text-align: left; padding: 3px 6px; vertical-align: top }\ntd[class$=\"fixed\"], th[class$=\"fixed\"] { white-space: pre }\nsection, article { padding-top: 1px; padding-bottom: 8px }\nhr.pagebreak { height: 0px; border: 0; border-bottom: 1px solid #c0c0c0; margin: 1em 0 }\n.stacked-value { text-align: left; display: block }\n.stacked-cell > .stacked-value, td.data > td.data, th.data > td.data, th.data > th.data, td.data > th.data, th.header > th.header { border: 0 }\n.stacked-cell > div.data { border-width: 0 }\n.systitleandfootercontainer { white-space: nowrap; margin-bottom: 1em }\n.systitleandfootercontainer > p { margin: 0 }\n.systitleandfootercontainer > p > span { display: inline-block; width: 100%; white-space: normal }\n.batch { display: table }\n.toc { display: none }\n.proc_note_group, .proc_title_group { margin-bottom: 1em }\np.proctitle { margin: 0 }\np.note, p.warning, p.error, p.fatal { display: table }\n.notebanner, .warnbanner, .errorbanner, .fatalbanner,\n.notecontent, .warncontent, .errorcontent, .fatalcontent { display: table-cell; padding: 0.5em }\n.notebanner, .warnbanner, .errorbanner, .fatalbanner { padding-right: 0 }\n.body > div > ol li { text-align: left }\n.beforecaption > h4 { margin-top: 0; margin-bottom: 0 }\n.c { text-align: center }\n.r { text-align: right }\n.l { text-align: left }\n.j { text-align: justify }\n.d { text-align: right }\n.b { vertical-align: bottom }\n.m { vertical-align: middle }\n.t { vertical-align: top }\n.accessiblecaption {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\na:active { color: #800080 }\n.aftercaption {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n    padding-top: 4pt;\n}\n.batch > colgroup {\n    border-left: 1px solid #c1c1c1;\n    border-right: 1px solid #c1c1c1;\n}\n.batch > tbody, .batch > thead, .batch > tfoot {\n    border-top: 1px solid #c1c1c1;\n    border-bottom: 1px solid #c1c1c1;\n}\n.batch { border: hidden; }\n.batch {\n    background-color: #fafbfe;\n    border: 1px solid #c1c1c1;\n    border-collapse: separate;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: \"SAS Monospace\", \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    padding: 7px;\n    }\n.beforecaption {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.body {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    margin-left: 8px;\n    margin-right: 8px;\n}\n.bodydate {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    text-align: right;\n    vertical-align: top;\n    width: 100%;\n}\n.bycontentfolder {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.byline {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.bylinecontainer > col, .bylinecontainer > colgroup > col, .bylinecontainer > colgroup, .bylinecontainer > tr, .bylinecontainer > * > tr, .bylinecontainer > thead, .bylinecontainer > tbody, .bylinecontainer > tfoot { border: none; }\n.bylinecontainer {\n    background-color: #fafbfe;\n    border: none;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.caption {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.cell, .container {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.contentfolder, .contentitem {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.contentproclabel, .contentprocname {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.contents {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: decimal;\n    margin-left: 8px;\n    margin-right: 8px;\n}\n.contentsdate {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.contenttitle {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: bold;\n}\n.continued {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n    width: 100%;\n}\n.data, .dataemphasis {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.dataemphasisfixed {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.dataempty {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.datafixed {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.datastrong {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.datastrongfixed {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.date {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.document {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.errorbanner {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.errorcontent {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.errorcontentfixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.extendedpage {\n    background-color: #fafbfe;\n    border-style: solid;\n    border-width: 1pt;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n    text-align: center;\n}\n.fatalbanner {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.fatalcontent {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.fatalcontentfixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.folderaction {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.footer {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.footeremphasis {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.footeremphasisfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.footerempty {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.footerfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.footerstrong {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.footerstrongfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.frame {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.graph > colgroup {\n    border-left: 1px solid #c1c1c1;\n    border-right: 1px solid #c1c1c1;\n}\n.graph > tbody, .graph > thead, .graph > tfoot {\n    border-top: 1px solid #c1c1c1;\n    border-bottom: 1px solid #c1c1c1;\n}\n.graph { border: hidden; }\n.graph {\n    background-color: #fafbfe;\n    border: 1px solid #c1c1c1;\n    border-collapse: separate;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    }\n.header {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.headeremphasis {\n    background-color: #d8dbd3;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.headeremphasisfixed {\n    background-color: #d8dbd3;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.headerempty {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.headerfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.headersandfooters {\n    background-color: #edf2f9;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.headerstrong {\n    background-color: #d8dbd3;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.headerstrongfixed {\n    background-color: #d8dbd3;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.heading1, .heading2, .heading3, .heading4, .heading5, .heading6 { font-family: Arial, Helvetica, sans-serif }\n.index {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.indexaction, .indexitem {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.indexprocname {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.indextitle {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: bold;\n}\n.layoutcontainer, .layoutregion {\n    border-width: 0;\n    border-spacing: 30px;\n}\n.linecontent {\n    background-color: #fafbfe;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\na:link { color: #0000ff }\n.list {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: disc;\n}\n.list10 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: square;\n}\n.list2 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: circle;\n}\n.list3, .list4, .list5, .list6, .list7, .list8, .list9 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: square;\n}\n.listitem {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: disc;\n}\n.listitem10 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: square;\n}\n.listitem2 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: circle;\n}\n.listitem3, .listitem4, .listitem5, .listitem6, .listitem7, .listitem8, .listitem9 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: square;\n}\n.note {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.notebanner {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.notecontent {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.notecontentfixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.output > colgroup {\n    border-left: 1px solid #c1c1c1;\n    border-right: 1px solid #c1c1c1;\n}\n.output > tbody, .output > thead, .output > tfoot {\n    border-top: 1px solid #c1c1c1;\n    border-bottom: 1px solid #c1c1c1;\n}\n.output { border: hidden; }\n.output {\n    background-color: #fafbfe;\n    border: 1px solid #c1c1c1;\n    border-collapse: separate;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    }\n.pageno {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n    text-align: right;\n    vertical-align: top;\n}\n.pages {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: decimal;\n    margin-left: 8px;\n    margin-right: 8px;\n}\n.pagesdate {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.pagesitem {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.pagesproclabel, .pagesprocname {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.pagestitle {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: bold;\n}\n.paragraph {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.parskip > col, .parskip > colgroup > col, .parskip > colgroup, .parskip > tr, .parskip > * > tr, .parskip > thead, .parskip > tbody, .parskip > tfoot { border: none; }\n.parskip {\n    border: none;\n    border-spacing: 0;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n    }\n.prepage {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    text-align: left;\n}\n.proctitle {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.proctitlefixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowfooter {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowfooteremphasis {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.rowfooteremphasisfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.rowfooterempty {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowfooterfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.rowfooterstrong {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowfooterstrongfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowheader {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowheaderemphasis {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.rowheaderemphasisfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.rowheaderempty {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowheaderfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.rowheaderstrong {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowheaderstrongfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.systemfooter, .systemfooter10, .systemfooter2, .systemfooter3, .systemfooter4, .systemfooter5, .systemfooter6, .systemfooter7, .systemfooter8, .systemfooter9 {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.systemtitle, .systemtitle10, .systemtitle2, .systemtitle3, .systemtitle4, .systemtitle5, .systemtitle6, .systemtitle7, .systemtitle8, .systemtitle9 {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size: small;\n    font-style: normal;\n    font-weight: bold;\n}\n.systitleandfootercontainer > col, .systitleandfootercontainer > colgroup > col, .systitleandfootercontainer > colgroup, .systitleandfootercontainer > tr, .systitleandfootercontainer > * > tr, .systitleandfootercontainer > thead, .systitleandfootercontainer > tbody, .systitleandfootercontainer > tfoot { border: none; }\n.systitleandfootercontainer {\n    background-color: #fafbfe;\n    border: none;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.table > col, .table > colgroup > col {\n    border-left: 1px solid #c1c1c1;\n    border-right: 0 solid #c1c1c1;\n}\n.table > tr, .table > * > tr {\n    border-top: 1px solid #c1c1c1;\n    border-bottom: 0 solid #c1c1c1;\n}\n.table { border: hidden; }\n.table {\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 1px 0 0 1px;\n    border-collapse: collapse;\n    border-spacing: 0;\n    }\n.titleandnotecontainer > col, .titleandnotecontainer > colgroup > col, .titleandnotecontainer > colgroup, .titleandnotecontainer > tr, .titleandnotecontainer > * > tr, .titleandnotecontainer > thead, .titleandnotecontainer > tbody, .titleandnotecontainer > tfoot { border: none; }\n.titleandnotecontainer {\n    background-color: #fafbfe;\n    border: none;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.titlesandfooters {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.usertext {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\na:visited { color: #800080 }\n.warnbanner {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.warncontent {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.warncontentfixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n/*]]>*/\n<\/style>\n<\/head>\n<body class=\"l body\">\n<div style=\"padding-bottom: 8px; padding-top: 1px\">\n<div id=\"IDX\" class=\"systitleandfootercontainer\" style=\"border-spacing: 1px\">\n<p><span class=\"c systemtitle\">The SAS System<\/span> <\/p>\n<\/div>\n<div class=\"proc_title_group\">\n<p class=\"c proctitle\">The MEANS Procedure<\/p>\n<\/div>\n<div style=\"padding-bottom: 8px; padding-top: 1px\">\n<table class=\"table\" style=\"border-spacing: 0\" aria-label=\"Summary statistics\">\n<caption aria-label=\"Summary statistics\"><\/caption>\n<colgroup><col/><col/><\/colgroup><colgroup><col/><col/><col/><col/><col/><\/colgroup>\n<thead>\n<tr>\n<th class=\"b header\" scope=\"col\">Variable<\/th>\n<th class=\"b header\" scope=\"col\">Label<\/th>\n<th class=\"r b header\" scope=\"col\">N<\/th>\n<th class=\"r b header\" scope=\"col\">Mean<\/th>\n<th class=\"r b header\" scope=\"col\">Std Dev<\/th>\n<th class=\"r b header\" scope=\"col\">Minimum<\/th>\n<th class=\"r b header\" scope=\"col\">Maximum<\/th>\n<\/tr>\n<\/thead>\n<tbody>\n<tr>\n<th class=\"data\">\n<div class=\"stacked-cell\">\n<div>MPG_City<\/div>\n<div>MPG_Highway<\/div>\n<\/div>\n<\/th>\n<th class=\"data\">\n<div class=\"stacked-cell\">\n<div>MPG (City)<\/div>\n<div>MPG (Highway)<\/div>\n<\/div>\n<\/th>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">428<\/div>\n<div class=\"r\">428<\/div>\n<\/div>\n<\/td>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">20.0607477<\/div>\n<div class=\"r\">26.8434579<\/div>\n<\/div>\n<\/td>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">5.2382176<\/div>\n<div class=\"r\">5.7412007<\/div>\n<\/div>\n<\/td>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">10.0000000<\/div>\n<div class=\"r\">12.0000000<\/div>\n<\/div>\n<\/td>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">60.0000000<\/div>\n<div class=\"r\">66.0000000<\/div>\n<\/div>\n<\/td>\n<\/tr>\n<\/tbody>\n<\/table>\n<\/div>\n<\/div>\n<\/body>\n<\/html>\n","log":"\n21   ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods\n21 ! graphics on / outputfmt=png;\nNOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT\n22   \n23   *| cache: false;\n24   proc means data=sashelp.cars;\n25     var mpg_city mpg_highway;\n26   run;\nNOTE: There were 428 observations read from the data set SASHELP.CARS.\nNOTE: PROCEDURE MEANS used (Total process time):\n      real time           0.01 seconds\n      cpu time            0.01 seconds\n      \n27   \n28   ods html5 (id=saspy_internal) close;ods listing;\n","capture":"log"},"evals":[],"jsHooks":[]}</script>
 </div>
 </div>
 </section>
 <section id="rとsas間のデータ受け渡し" class="slide level2">
 <h2>RとSAS間のデータ受け渡し</h2>
 <div class="cell">
-<div class="sourceCode cell-code" id="cb14"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb14-1"><a href></a><span class="in">```{r}</span></span>
-<span id="cb14-2"><a href></a><span class="fu">sas_from_r</span>(mtcars, <span class="st">&quot;mtcars&quot;</span>, <span class="at">libref =</span> <span class="st">&quot;WORK&quot;</span>)</span>
-<span id="cb14-3"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<div class="cell-output cell-output-error">
-<pre><code>Error in `sas_from_r()`:
-✖ No active SAS connection.
-ℹ Use `sasquatch::sas_connect()` to start a new SAS session.</code></pre>
-</div>
-</div>
-<div class="cell">
-<div class="sourceCode cell-code" id="cb16"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb16-1"><a href></a><span class="in">```{sas}</span></span>
-<span id="cb16-2"><a href></a><span class="in">*| echo: fenced;</span></span>
-<span id="cb16-3"><a href></a><span class="in">*| capture: listing;</span></span>
-<span id="cb16-4"><a href></a><span class="in">*| cache: false;</span></span>
-<span id="cb16-5"><a href></a><span class="in">proc means data=work.mtcars;</span></span>
-<span id="cb16-6"><a href></a><span class="in">  var mpg disp;</span></span>
-<span id="cb16-7"><a href></a><span class="in">run;</span></span>
-<span id="cb16-8"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<div class="cell-output cell-output-error">
-<pre><code>Error in `sasquatch::sas_run_string()`:
-✖ No active SAS connection.
-ℹ Use `sasquatch::sas_connect()` to start a new SAS session.</code></pre>
+<div class="sourceCode cell-code" id="cb10"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb10-1"><a href></a><span class="in">```{r}</span></span>
+<span id="cb10-2"><a href></a>sas_cars <span class="ot">&lt;-</span> <span class="fu">sas_to_r</span>(<span class="st">&quot;cars&quot;</span>, <span class="at">libref =</span> <span class="st">&quot;sashelp&quot;</span>)</span>
+<span id="cb10-3"><a href></a><span class="fu">head</span>(sas_cars,<span class="dv">5</span>)</span>
+<span id="cb10-4"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>   Make          Model  Type Origin DriveTrain  MSRP Invoice EngineSize
+1 Acura            MDX   SUV   Asia        All 36945   33337        3.5
+2 Acura RSX Type S 2dr Sedan   Asia      Front 23820   21761        2.0
+3 Acura        TSX 4dr Sedan   Asia      Front 26990   24647        2.4
+4 Acura         TL 4dr Sedan   Asia      Front 33195   30299        3.2
+5 Acura     3.5 RL 4dr Sedan   Asia      Front 43755   39014        3.5
+  Cylinders Horsepower MPG_City MPG_Highway Weight Wheelbase Length
+1         6        265       17          23   4451       106    189
+2         4        200       24          31   2778       101    172
+3         4        200       22          29   3230       105    183
+4         6        270       20          28   3575       108    186
+5         6        225       18          24   3880       115    197</code></pre>
 </div>
 </div>
 <blockquote>
-<p><code>sas_to_r()</code>を用いることで、SAS -&gt; Rのデータの受け渡しも可能</p>
+<p><code>sas_from_r()</code>を用いることで、R -&gt; SASのデータの受け渡しも可能</p>
 </blockquote>
 </section>
 <section id="summary" class="slide level2">
@@ -1392,74 +2352,103 @@ Markdownにおける複数言語の利用はコード実行や管理を複雑化
 <h2>Chunk optionの記述方法</h2>
 <p>R/SASmarkdownではChunk optionの冒頭に<code>#|</code>を記述する必要がある</p>
 <div class="cell">
-<div class="sourceCode cell-code" id="cb18"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb18-1"><a href></a><span class="in">```{r}</span></span>
-<span id="cb18-2"><a href></a><span class="co">#| eval: false</span></span>
-<span id="cb18-3"><a href></a><span class="fu">print</span>(<span class="st">&quot;Test&quot;</span>)</span>
-<span id="cb18-4"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb12"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb12-1"><a href></a><span class="in">```{r}</span></span>
+<span id="cb12-2"><a href></a><span class="co">#| eval: false</span></span>
+<span id="cb12-3"><a href></a><span class="fu">print</span>(<span class="st">&quot;Test&quot;</span>)</span>
+<span id="cb12-4"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </div>
 <p>Quarto SAS/sasquatchでは冒頭の<code>#|</code>の代わりに、冒頭に<code>*|</code>を、末尾に<code>;</code>を付与する必要がある。</p>
 <div class="cell">
-<div class="sourceCode cell-code" id="cb19"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb19-1"><a href></a><span class="in">```{sas}</span></span>
-<span id="cb19-2"><a href></a><span class="in">*| echo: fenced;</span></span>
-<span id="cb19-3"><a href></a><span class="in">proc means data=sashelp.cars;</span></span>
-<span id="cb19-4"><a href></a><span class="in">  var mpg_city mpg_highway;</span></span>
-<span id="cb19-5"><a href></a><span class="in">run;</span></span>
-<span id="cb19-6"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<div class="cell-output cell-output-error">
-<pre><code>Error in `sasquatch::sas_run_string()`:
-✖ No active SAS connection.
-ℹ Use `sasquatch::sas_connect()` to start a new SAS session.</code></pre>
+<div class="sourceCode cell-code" id="cb13"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb13-1"><a href></a><span class="in">```{sas}</span></span>
+<span id="cb13-2"><a href></a><span class="in">*| echo: fenced;</span></span>
+<span id="cb13-3"><a href></a><span class="in">proc means data=sashelp.cars;</span></span>
+<span id="cb13-4"><a href></a><span class="in">  var mpg_city mpg_highway;</span></span>
+<span id="cb13-5"><a href></a><span class="in">run;</span></span>
+<span id="cb13-6"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div id="htmlwidget-b3d85fe3c5fd2684ae8c" style="width:960px;height:auto;" class="sas_widget html-widget"></div>
+<script type="application/json" data-for="htmlwidget-b3d85fe3c5fd2684ae8c">{"x":{"lst":"<!DOCTYPE html>\n<html lang=\"en\" xml:lang=\"en\" xmlns=\"http://www.w3.org/1999/xhtml\">\n<head>\n<meta charset=\"utf-8\"/>\n<meta content=\"SAS 9.4\" name=\"generator\"/>\n<title>SAS Output<\/title>\n<style>\n/*<![CDATA[*/\n.body.c > table, .body.c > pre, .body.c div > table,\n.body.c div > pre, .body.c > table, .body.c > pre,\n.body.j > table, .body.j > pre, .body.j div > table,\n.body.j div > pre, .body.j > table, .body.j > pre,\n.body.c p.note, .body.c p.warning, .body.c p.error, .body.c p.fatal,\n.body.j p.note, .body.j p.warning, .body.j p.error, .body.j p.fatal,\n.body.c > table.layoutcontainer, .body.j > table.layoutcontainer { margin-left: auto; margin-right: auto }\n.layoutregion.l table, .layoutregion.l pre, .layoutregion.l p.note,\n.layoutregion.l p.warning, .layoutregion.l p.error, .layoutregion.l p.fatal { margin-left: 0 }\n.layoutregion.c table, .layoutregion.c pre, .layoutregion.c p.note,\n.layoutregion.c p.warning, .layoutregion.c p.error, .layoutregion.c p.fatal { margin-left: auto; margin-right: auto }\n.layoutregion.r table, .layoutregion.r pre, .layoutregion.r p.note,\n.layoutregion.r table, .layoutregion.r pre, .layoutregion.r p.note,\n.layoutregion.r p.warning, .layoutregion.r p.error, .layoutregion.r p.fatal { margin-right: 0 }\narticle, aside, details, figcaption, figure, footer, header, hgroup, nav, section { display: block }\nhtml{ font-size: 100% }\n.body { margin: 1em; font-size: 13px; line-height: 1.231 }\nsup { position: relative; vertical-align: baseline; bottom: 0.25em; font-size: 0.8em }\nsub { position: relative; vertical-align: baseline; top: 0.25em; font-size: 0.8em }\nul, ol { margin: 1em 0; padding: 0 0 0 40px }\ndd { margin: 0 0 0 40px }\nnav ul, nav ol { list-style: none; list-style-image: none; margin: 0; padding: 0 }\nimg { border: 0; vertical-align: middle }\nsvg:not(:root) { overflow: hidden }\nfigure { margin: 0 }\ntable { border-collapse: collapse; border-spacing: 0 }\n.layoutcontainer { border-collapse: separate; border-spacing: 0 }\np { margin-top: 0; text-align: left }\nh1.heading1 { text-align: left }\nh2.heading2 { text-align: left }\nh3.heading3 { text-align: left }\nh4.heading4 { text-align: left }\nh5.heading5 { text-align: left }\nh6.heading6 { text-align: left }\nspan { text-align: left }\ntable { margin-bottom: 1em }\ntd, th { text-align: left; padding: 3px 6px; vertical-align: top }\ntd[class$=\"fixed\"], th[class$=\"fixed\"] { white-space: pre }\nsection, article { padding-top: 1px; padding-bottom: 8px }\nhr.pagebreak { height: 0px; border: 0; border-bottom: 1px solid #c0c0c0; margin: 1em 0 }\n.stacked-value { text-align: left; display: block }\n.stacked-cell > .stacked-value, td.data > td.data, th.data > td.data, th.data > th.data, td.data > th.data, th.header > th.header { border: 0 }\n.stacked-cell > div.data { border-width: 0 }\n.systitleandfootercontainer { white-space: nowrap; margin-bottom: 1em }\n.systitleandfootercontainer > p { margin: 0 }\n.systitleandfootercontainer > p > span { display: inline-block; width: 100%; white-space: normal }\n.batch { display: table }\n.toc { display: none }\n.proc_note_group, .proc_title_group { margin-bottom: 1em }\np.proctitle { margin: 0 }\np.note, p.warning, p.error, p.fatal { display: table }\n.notebanner, .warnbanner, .errorbanner, .fatalbanner,\n.notecontent, .warncontent, .errorcontent, .fatalcontent { display: table-cell; padding: 0.5em }\n.notebanner, .warnbanner, .errorbanner, .fatalbanner { padding-right: 0 }\n.body > div > ol li { text-align: left }\n.beforecaption > h4 { margin-top: 0; margin-bottom: 0 }\n.c { text-align: center }\n.r { text-align: right }\n.l { text-align: left }\n.j { text-align: justify }\n.d { text-align: right }\n.b { vertical-align: bottom }\n.m { vertical-align: middle }\n.t { vertical-align: top }\n.accessiblecaption {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\na:active { color: #800080 }\n.aftercaption {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n    padding-top: 4pt;\n}\n.batch > colgroup {\n    border-left: 1px solid #c1c1c1;\n    border-right: 1px solid #c1c1c1;\n}\n.batch > tbody, .batch > thead, .batch > tfoot {\n    border-top: 1px solid #c1c1c1;\n    border-bottom: 1px solid #c1c1c1;\n}\n.batch { border: hidden; }\n.batch {\n    background-color: #fafbfe;\n    border: 1px solid #c1c1c1;\n    border-collapse: separate;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: \"SAS Monospace\", \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    padding: 7px;\n    }\n.beforecaption {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.body {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    margin-left: 8px;\n    margin-right: 8px;\n}\n.bodydate {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    text-align: right;\n    vertical-align: top;\n    width: 100%;\n}\n.bycontentfolder {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.byline {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.bylinecontainer > col, .bylinecontainer > colgroup > col, .bylinecontainer > colgroup, .bylinecontainer > tr, .bylinecontainer > * > tr, .bylinecontainer > thead, .bylinecontainer > tbody, .bylinecontainer > tfoot { border: none; }\n.bylinecontainer {\n    background-color: #fafbfe;\n    border: none;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.caption {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.cell, .container {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.contentfolder, .contentitem {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.contentproclabel, .contentprocname {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.contents {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: decimal;\n    margin-left: 8px;\n    margin-right: 8px;\n}\n.contentsdate {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.contenttitle {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: bold;\n}\n.continued {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n    width: 100%;\n}\n.data, .dataemphasis {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.dataemphasisfixed {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.dataempty {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.datafixed {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.datastrong {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.datastrongfixed {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.date {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.document {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.errorbanner {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.errorcontent {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.errorcontentfixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.extendedpage {\n    background-color: #fafbfe;\n    border-style: solid;\n    border-width: 1pt;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n    text-align: center;\n}\n.fatalbanner {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.fatalcontent {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.fatalcontentfixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.folderaction {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.footer {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.footeremphasis {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.footeremphasisfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.footerempty {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.footerfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.footerstrong {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.footerstrongfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.frame {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.graph > colgroup {\n    border-left: 1px solid #c1c1c1;\n    border-right: 1px solid #c1c1c1;\n}\n.graph > tbody, .graph > thead, .graph > tfoot {\n    border-top: 1px solid #c1c1c1;\n    border-bottom: 1px solid #c1c1c1;\n}\n.graph { border: hidden; }\n.graph {\n    background-color: #fafbfe;\n    border: 1px solid #c1c1c1;\n    border-collapse: separate;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    }\n.header {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.headeremphasis {\n    background-color: #d8dbd3;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.headeremphasisfixed {\n    background-color: #d8dbd3;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.headerempty {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.headerfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.headersandfooters {\n    background-color: #edf2f9;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.headerstrong {\n    background-color: #d8dbd3;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.headerstrongfixed {\n    background-color: #d8dbd3;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.heading1, .heading2, .heading3, .heading4, .heading5, .heading6 { font-family: Arial, Helvetica, sans-serif }\n.index {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.indexaction, .indexitem {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.indexprocname {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.indextitle {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: bold;\n}\n.layoutcontainer, .layoutregion {\n    border-width: 0;\n    border-spacing: 30px;\n}\n.linecontent {\n    background-color: #fafbfe;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\na:link { color: #0000ff }\n.list {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: disc;\n}\n.list10 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: square;\n}\n.list2 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: circle;\n}\n.list3, .list4, .list5, .list6, .list7, .list8, .list9 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: square;\n}\n.listitem {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: disc;\n}\n.listitem10 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: square;\n}\n.listitem2 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: circle;\n}\n.listitem3, .listitem4, .listitem5, .listitem6, .listitem7, .listitem8, .listitem9 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: square;\n}\n.note {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.notebanner {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.notecontent {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.notecontentfixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.output > colgroup {\n    border-left: 1px solid #c1c1c1;\n    border-right: 1px solid #c1c1c1;\n}\n.output > tbody, .output > thead, .output > tfoot {\n    border-top: 1px solid #c1c1c1;\n    border-bottom: 1px solid #c1c1c1;\n}\n.output { border: hidden; }\n.output {\n    background-color: #fafbfe;\n    border: 1px solid #c1c1c1;\n    border-collapse: separate;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    }\n.pageno {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n    text-align: right;\n    vertical-align: top;\n}\n.pages {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: decimal;\n    margin-left: 8px;\n    margin-right: 8px;\n}\n.pagesdate {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.pagesitem {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.pagesproclabel, .pagesprocname {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.pagestitle {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: bold;\n}\n.paragraph {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.parskip > col, .parskip > colgroup > col, .parskip > colgroup, .parskip > tr, .parskip > * > tr, .parskip > thead, .parskip > tbody, .parskip > tfoot { border: none; }\n.parskip {\n    border: none;\n    border-spacing: 0;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n    }\n.prepage {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    text-align: left;\n}\n.proctitle {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.proctitlefixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowfooter {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowfooteremphasis {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.rowfooteremphasisfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.rowfooterempty {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowfooterfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.rowfooterstrong {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowfooterstrongfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowheader {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowheaderemphasis {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.rowheaderemphasisfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.rowheaderempty {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowheaderfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.rowheaderstrong {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowheaderstrongfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.systemfooter, .systemfooter10, .systemfooter2, .systemfooter3, .systemfooter4, .systemfooter5, .systemfooter6, .systemfooter7, .systemfooter8, .systemfooter9 {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.systemtitle, .systemtitle10, .systemtitle2, .systemtitle3, .systemtitle4, .systemtitle5, .systemtitle6, .systemtitle7, .systemtitle8, .systemtitle9 {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size: small;\n    font-style: normal;\n    font-weight: bold;\n}\n.systitleandfootercontainer > col, .systitleandfootercontainer > colgroup > col, .systitleandfootercontainer > colgroup, .systitleandfootercontainer > tr, .systitleandfootercontainer > * > tr, .systitleandfootercontainer > thead, .systitleandfootercontainer > tbody, .systitleandfootercontainer > tfoot { border: none; }\n.systitleandfootercontainer {\n    background-color: #fafbfe;\n    border: none;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.table > col, .table > colgroup > col {\n    border-left: 1px solid #c1c1c1;\n    border-right: 0 solid #c1c1c1;\n}\n.table > tr, .table > * > tr {\n    border-top: 1px solid #c1c1c1;\n    border-bottom: 0 solid #c1c1c1;\n}\n.table { border: hidden; }\n.table {\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 1px 0 0 1px;\n    border-collapse: collapse;\n    border-spacing: 0;\n    }\n.titleandnotecontainer > col, .titleandnotecontainer > colgroup > col, .titleandnotecontainer > colgroup, .titleandnotecontainer > tr, .titleandnotecontainer > * > tr, .titleandnotecontainer > thead, .titleandnotecontainer > tbody, .titleandnotecontainer > tfoot { border: none; }\n.titleandnotecontainer {\n    background-color: #fafbfe;\n    border: none;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.titlesandfooters {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.usertext {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\na:visited { color: #800080 }\n.warnbanner {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.warncontent {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.warncontentfixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n/*]]>*/\n<\/style>\n<\/head>\n<body class=\"l body\">\n<div style=\"padding-bottom: 8px; padding-top: 1px\">\n<div id=\"IDX\" class=\"systitleandfootercontainer\" style=\"border-spacing: 1px\">\n<p><span class=\"c systemtitle\">The SAS System<\/span> <\/p>\n<\/div>\n<div class=\"proc_title_group\">\n<p class=\"c proctitle\">The MEANS Procedure<\/p>\n<\/div>\n<div style=\"padding-bottom: 8px; padding-top: 1px\">\n<table class=\"table\" style=\"border-spacing: 0\" aria-label=\"Summary statistics\">\n<caption aria-label=\"Summary statistics\"><\/caption>\n<colgroup><col/><col/><\/colgroup><colgroup><col/><col/><col/><col/><col/><\/colgroup>\n<thead>\n<tr>\n<th class=\"b header\" scope=\"col\">Variable<\/th>\n<th class=\"b header\" scope=\"col\">Label<\/th>\n<th class=\"r b header\" scope=\"col\">N<\/th>\n<th class=\"r b header\" scope=\"col\">Mean<\/th>\n<th class=\"r b header\" scope=\"col\">Std Dev<\/th>\n<th class=\"r b header\" scope=\"col\">Minimum<\/th>\n<th class=\"r b header\" scope=\"col\">Maximum<\/th>\n<\/tr>\n<\/thead>\n<tbody>\n<tr>\n<th class=\"data\">\n<div class=\"stacked-cell\">\n<div>MPG_City<\/div>\n<div>MPG_Highway<\/div>\n<\/div>\n<\/th>\n<th class=\"data\">\n<div class=\"stacked-cell\">\n<div>MPG (City)<\/div>\n<div>MPG (Highway)<\/div>\n<\/div>\n<\/th>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">428<\/div>\n<div class=\"r\">428<\/div>\n<\/div>\n<\/td>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">20.0607477<\/div>\n<div class=\"r\">26.8434579<\/div>\n<\/div>\n<\/td>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">5.2382176<\/div>\n<div class=\"r\">5.7412007<\/div>\n<\/div>\n<\/td>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">10.0000000<\/div>\n<div class=\"r\">12.0000000<\/div>\n<\/div>\n<\/td>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">60.0000000<\/div>\n<div class=\"r\">66.0000000<\/div>\n<\/div>\n<\/td>\n<\/tr>\n<\/tbody>\n<\/table>\n<\/div>\n<\/div>\n<\/body>\n<\/html>\n","log":"\n88   ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods\n88 ! graphics on / outputfmt=png;\nNOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT\n89   \n90   proc means data=sashelp.cars;\n91     var mpg_city mpg_highway;\n92   run;\nNOTE: There were 428 observations read from the data set SASHELP.CARS.\nNOTE: PROCEDURE MEANS used (Total process time):\n      real time           0.07 seconds\n      cpu time            0.02 seconds\n      \n93   \n94   ods html5 (id=saspy_internal) close;ods listing;\n","capture":"both"},"evals":[],"jsHooks":[]}</script>
 </div>
 </div>
 </section>
-<section id="quarto単体のsas-コードブロック-設定方法" class="slide level2 smaller">
+<section id="set-quart" class="slide level2">
 <h2>Quarto単体のSAS コードブロック 設定方法</h2>
 <ul>
 <li>SASのPathを<code>yml</code>にて記述する必要がある</li>
 </ul>
-<div class="sourceCode" id="cb21"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb21-1"><a href></a><span class="an">engine:</span><span class="co"> knitr</span></span>
-<span id="cb21-2"><a href></a><span class="an">knitr:</span></span>
-<span id="cb21-3"><a href></a>  opts_chunk:</span>
-<span id="cb21-4"><a href></a>    engine.path:</span>
-<span id="cb21-5"><a href></a>      sas: &quot;/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas&quot;</span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode" id="cb14"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb14-1"><a href></a><span class="an">engine:</span><span class="co"> knitr</span></span>
+<span id="cb14-2"><a href></a><span class="an">knitr:</span></span>
+<span id="cb14-3"><a href></a>  opts_chunk:</span>
+<span id="cb14-4"><a href></a>    engine.path:</span>
+<span id="cb14-5"><a href></a>      sas: &quot;/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas&quot;</span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </section>
-<section id="sasmarkdown-設定方法" class="slide level2 smaller">
+<section id="set-SASmarkdown" class="slide level2">
 <h2>SASmarkdown 設定方法</h2>
 <p><code>sas</code>, <code>saslog</code>などのコードブロックを使用する前に、engine名やSASのPathを設定する必要がある</p>
 <div class="cell">
-<div class="sourceCode cell-code" id="cb22"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb22-1"><a href></a><span class="fu">library</span>(SASmarkdown)</span>
-<span id="cb22-2"><a href></a>saspath <span class="ot">&lt;-</span> <span class="st">&quot;/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas&quot;</span></span>
-<span id="cb22-3"><a href></a>knitr<span class="sc">::</span>opts_chunk<span class="sc">$</span><span class="fu">set</span>(</span>
-<span id="cb22-4"><a href></a>  <span class="at">engine.path =</span> <span class="fu">list</span>(</span>
-<span id="cb22-5"><a href></a>    <span class="at">sas         =</span> saspath,</span>
-<span id="cb22-6"><a href></a>    <span class="at">saslog      =</span> saspath,</span>
-<span id="cb22-7"><a href></a>    <span class="at">sashtml     =</span> saspath</span>
-<span id="cb22-8"><a href></a>  ),</span>
-<span id="cb22-9"><a href></a>  <span class="at">comment =</span> <span class="cn">NA</span></span>
-<span id="cb22-10"><a href></a>)</span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb15"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb15-1"><a href></a><span class="fu">library</span>(SASmarkdown)</span>
+<span id="cb15-2"><a href></a>saspath <span class="ot">&lt;-</span> <span class="st">&quot;/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas&quot;</span></span>
+<span id="cb15-3"><a href></a>knitr<span class="sc">::</span>opts_chunk<span class="sc">$</span><span class="fu">set</span>(</span>
+<span id="cb15-4"><a href></a>  <span class="at">engine.path =</span> <span class="fu">list</span>(</span>
+<span id="cb15-5"><a href></a>    <span class="at">sas         =</span> saspath,</span>
+<span id="cb15-6"><a href></a>    <span class="at">saslog      =</span> saspath,</span>
+<span id="cb15-7"><a href></a>    <span class="at">sashtml     =</span> saspath</span>
+<span id="cb15-8"><a href></a>  ),</span>
+<span id="cb15-9"><a href></a>  <span class="at">comment =</span> <span class="cn">NA</span></span>
+<span id="cb15-10"><a href></a>)</span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </div>
 </section>
-<section id="sasquatch-設定方法" class="slide level2 smaller">
+<section id="set-sasquatch" class="slide level2">
 <h2>sasquatch 設定方法</h2>
 <p>以下は初期設定のためのCodeであり、Quarto documentに含める必要は無い</p>
 <div class="cell">
-<div class="sourceCode cell-code" id="cb23"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb23-1"><a href></a><span class="in">```{r}</span></span>
-<span id="cb23-2"><a href></a><span class="co">#| eval: false</span></span>
-<span id="cb23-3"><a href></a><span class="fu">library</span>(sasquatch)</span>
-<span id="cb23-4"><a href></a>sasquatch<span class="sc">::</span><span class="fu">install_saspy</span>() </span>
-<span id="cb23-5"><a href></a>sasquatch<span class="sc">::</span><span class="fu">configure_saspy</span>()</span>
-<span id="cb23-6"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb16"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb16-1"><a href></a><span class="in">```{r}</span></span>
+<span id="cb16-2"><a href></a><span class="co">#| eval: false</span></span>
+<span id="cb16-3"><a href></a><span class="fu">library</span>(sasquatch)</span>
+<span id="cb16-4"><a href></a>sasquatch<span class="sc">::</span><span class="fu">install_saspy</span>() </span>
+<span id="cb16-5"><a href></a>sasquatch<span class="sc">::</span><span class="fu">configure_saspy</span>()</span>
+<span id="cb16-6"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </div>
 <p>以下のような<code>.py</code> fileを設定することが必要。こちらもdocumentには不要</p>
 <div class="cell">
-<div class="sourceCode cell-code" id="cb24"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb24-1"><a href></a><span class="in">```{python}</span></span>
-<span id="cb24-2"><a href></a><span class="co">#| eval: false</span></span>
-<span id="cb24-3"><a href></a>SAS_config_names <span class="op">=</span> [<span class="st">&#39;config_name&#39;</span>]</span>
-<span id="cb24-4"><a href></a>config_name <span class="op">=</span> {</span>
-<span id="cb24-5"><a href></a>  <span class="st">&#39;saspath&#39;</span>: <span class="st">&#39;/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas&#39;</span></span>
-<span id="cb24-6"><a href></a>}</span>
-<span id="cb24-7"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb17"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb17-1"><a href></a><span class="in">```{python}</span></span>
+<span id="cb17-2"><a href></a><span class="co">#| eval: false</span></span>
+<span id="cb17-3"><a href></a>SAS_config_names <span class="op">=</span> [<span class="st">&#39;config_name&#39;</span>]</span>
+<span id="cb17-4"><a href></a>config_name <span class="op">=</span> {</span>
+<span id="cb17-5"><a href></a>  <span class="st">&#39;saspath&#39;</span>: <span class="st">&#39;/CHBS/apps/SAS/SAS9.4M8/SASHome/SASFoundation/9.4/sas&#39;</span></span>
+<span id="cb17-6"><a href></a>}</span>
+<span id="cb17-7"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </div>
+</section>
+<section id="rとsas間のデータ受け渡し-sas_from_r" class="slide level2">
+<h2>RとSAS間のデータ受け渡し sas_from_r</h2>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb18"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb18-1"><a href></a><span class="in">```{r}</span></span>
+<span id="cb18-2"><a href></a><span class="fu">sas_from_r</span>(mtcars, <span class="st">&quot;mtcars&quot;</span>, <span class="at">libref =</span> <span class="st">&quot;WORK&quot;</span>)</span>
+<span id="cb18-3"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb19"><pre class="sourceCode numberSource markdown number-lines code-with-copy"><code class="sourceCode markdown"><span id="cb19-1"><a href></a><span class="in">```{sas}</span></span>
+<span id="cb19-2"><a href></a><span class="in">*| echo: fenced;</span></span>
+<span id="cb19-3"><a href></a><span class="in">*| capture: listing;</span></span>
+<span id="cb19-4"><a href></a><span class="in">*| cache: false;</span></span>
+<span id="cb19-5"><a href></a><span class="in">proc means data=work.mtcars;</span></span>
+<span id="cb19-6"><a href></a><span class="in">  var mpg disp;</span></span>
+<span id="cb19-7"><a href></a><span class="in">run;</span></span>
+<span id="cb19-8"><a href></a><span class="in">```</span></span></code><button title="コピー" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div id="htmlwidget-1be3dfae13fd98c31e3a" style="width:960px;height:auto;" class="sas_widget html-widget"></div>
+<script type="application/json" data-for="htmlwidget-1be3dfae13fd98c31e3a">{"x":{"lst":"<!DOCTYPE html>\n<html lang=\"en\" xml:lang=\"en\" xmlns=\"http://www.w3.org/1999/xhtml\">\n<head>\n<meta charset=\"utf-8\"/>\n<meta content=\"SAS 9.4\" name=\"generator\"/>\n<title>SAS Output<\/title>\n<style>\n/*<![CDATA[*/\n.body.c > table, .body.c > pre, .body.c div > table,\n.body.c div > pre, .body.c > table, .body.c > pre,\n.body.j > table, .body.j > pre, .body.j div > table,\n.body.j div > pre, .body.j > table, .body.j > pre,\n.body.c p.note, .body.c p.warning, .body.c p.error, .body.c p.fatal,\n.body.j p.note, .body.j p.warning, .body.j p.error, .body.j p.fatal,\n.body.c > table.layoutcontainer, .body.j > table.layoutcontainer { margin-left: auto; margin-right: auto }\n.layoutregion.l table, .layoutregion.l pre, .layoutregion.l p.note,\n.layoutregion.l p.warning, .layoutregion.l p.error, .layoutregion.l p.fatal { margin-left: 0 }\n.layoutregion.c table, .layoutregion.c pre, .layoutregion.c p.note,\n.layoutregion.c p.warning, .layoutregion.c p.error, .layoutregion.c p.fatal { margin-left: auto; margin-right: auto }\n.layoutregion.r table, .layoutregion.r pre, .layoutregion.r p.note,\n.layoutregion.r table, .layoutregion.r pre, .layoutregion.r p.note,\n.layoutregion.r p.warning, .layoutregion.r p.error, .layoutregion.r p.fatal { margin-right: 0 }\narticle, aside, details, figcaption, figure, footer, header, hgroup, nav, section { display: block }\nhtml{ font-size: 100% }\n.body { margin: 1em; font-size: 13px; line-height: 1.231 }\nsup { position: relative; vertical-align: baseline; bottom: 0.25em; font-size: 0.8em }\nsub { position: relative; vertical-align: baseline; top: 0.25em; font-size: 0.8em }\nul, ol { margin: 1em 0; padding: 0 0 0 40px }\ndd { margin: 0 0 0 40px }\nnav ul, nav ol { list-style: none; list-style-image: none; margin: 0; padding: 0 }\nimg { border: 0; vertical-align: middle }\nsvg:not(:root) { overflow: hidden }\nfigure { margin: 0 }\ntable { border-collapse: collapse; border-spacing: 0 }\n.layoutcontainer { border-collapse: separate; border-spacing: 0 }\np { margin-top: 0; text-align: left }\nh1.heading1 { text-align: left }\nh2.heading2 { text-align: left }\nh3.heading3 { text-align: left }\nh4.heading4 { text-align: left }\nh5.heading5 { text-align: left }\nh6.heading6 { text-align: left }\nspan { text-align: left }\ntable { margin-bottom: 1em }\ntd, th { text-align: left; padding: 3px 6px; vertical-align: top }\ntd[class$=\"fixed\"], th[class$=\"fixed\"] { white-space: pre }\nsection, article { padding-top: 1px; padding-bottom: 8px }\nhr.pagebreak { height: 0px; border: 0; border-bottom: 1px solid #c0c0c0; margin: 1em 0 }\n.stacked-value { text-align: left; display: block }\n.stacked-cell > .stacked-value, td.data > td.data, th.data > td.data, th.data > th.data, td.data > th.data, th.header > th.header { border: 0 }\n.stacked-cell > div.data { border-width: 0 }\n.systitleandfootercontainer { white-space: nowrap; margin-bottom: 1em }\n.systitleandfootercontainer > p { margin: 0 }\n.systitleandfootercontainer > p > span { display: inline-block; width: 100%; white-space: normal }\n.batch { display: table }\n.toc { display: none }\n.proc_note_group, .proc_title_group { margin-bottom: 1em }\np.proctitle { margin: 0 }\np.note, p.warning, p.error, p.fatal { display: table }\n.notebanner, .warnbanner, .errorbanner, .fatalbanner,\n.notecontent, .warncontent, .errorcontent, .fatalcontent { display: table-cell; padding: 0.5em }\n.notebanner, .warnbanner, .errorbanner, .fatalbanner { padding-right: 0 }\n.body > div > ol li { text-align: left }\n.beforecaption > h4 { margin-top: 0; margin-bottom: 0 }\n.c { text-align: center }\n.r { text-align: right }\n.l { text-align: left }\n.j { text-align: justify }\n.d { text-align: right }\n.b { vertical-align: bottom }\n.m { vertical-align: middle }\n.t { vertical-align: top }\n.accessiblecaption {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\na:active { color: #800080 }\n.aftercaption {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n    padding-top: 4pt;\n}\n.batch > colgroup {\n    border-left: 1px solid #c1c1c1;\n    border-right: 1px solid #c1c1c1;\n}\n.batch > tbody, .batch > thead, .batch > tfoot {\n    border-top: 1px solid #c1c1c1;\n    border-bottom: 1px solid #c1c1c1;\n}\n.batch { border: hidden; }\n.batch {\n    background-color: #fafbfe;\n    border: 1px solid #c1c1c1;\n    border-collapse: separate;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: \"SAS Monospace\", \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    padding: 7px;\n    }\n.beforecaption {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.body {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    margin-left: 8px;\n    margin-right: 8px;\n}\n.bodydate {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    text-align: right;\n    vertical-align: top;\n    width: 100%;\n}\n.bycontentfolder {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.byline {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.bylinecontainer > col, .bylinecontainer > colgroup > col, .bylinecontainer > colgroup, .bylinecontainer > tr, .bylinecontainer > * > tr, .bylinecontainer > thead, .bylinecontainer > tbody, .bylinecontainer > tfoot { border: none; }\n.bylinecontainer {\n    background-color: #fafbfe;\n    border: none;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.caption {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.cell, .container {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.contentfolder, .contentitem {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.contentproclabel, .contentprocname {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.contents {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: decimal;\n    margin-left: 8px;\n    margin-right: 8px;\n}\n.contentsdate {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.contenttitle {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: bold;\n}\n.continued {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n    width: 100%;\n}\n.data, .dataemphasis {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.dataemphasisfixed {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.dataempty {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.datafixed {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.datastrong {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.datastrongfixed {\n    background-color: #ffffff;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.date {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.document {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.errorbanner {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.errorcontent {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.errorcontentfixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.extendedpage {\n    background-color: #fafbfe;\n    border-style: solid;\n    border-width: 1pt;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n    text-align: center;\n}\n.fatalbanner {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.fatalcontent {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.fatalcontentfixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.folderaction {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.footer {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.footeremphasis {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.footeremphasisfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.footerempty {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.footerfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.footerstrong {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.footerstrongfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.frame {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.graph > colgroup {\n    border-left: 1px solid #c1c1c1;\n    border-right: 1px solid #c1c1c1;\n}\n.graph > tbody, .graph > thead, .graph > tfoot {\n    border-top: 1px solid #c1c1c1;\n    border-bottom: 1px solid #c1c1c1;\n}\n.graph { border: hidden; }\n.graph {\n    background-color: #fafbfe;\n    border: 1px solid #c1c1c1;\n    border-collapse: separate;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    }\n.header {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.headeremphasis {\n    background-color: #d8dbd3;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.headeremphasisfixed {\n    background-color: #d8dbd3;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.headerempty {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.headerfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.headersandfooters {\n    background-color: #edf2f9;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.headerstrong {\n    background-color: #d8dbd3;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.headerstrongfixed {\n    background-color: #d8dbd3;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #000000;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.heading1, .heading2, .heading3, .heading4, .heading5, .heading6 { font-family: Arial, Helvetica, sans-serif }\n.index {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.indexaction, .indexitem {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.indexprocname {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.indextitle {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: bold;\n}\n.layoutcontainer, .layoutregion {\n    border-width: 0;\n    border-spacing: 30px;\n}\n.linecontent {\n    background-color: #fafbfe;\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\na:link { color: #0000ff }\n.list {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: disc;\n}\n.list10 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: square;\n}\n.list2 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: circle;\n}\n.list3, .list4, .list5, .list6, .list7, .list8, .list9 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: square;\n}\n.listitem {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: disc;\n}\n.listitem10 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: square;\n}\n.listitem2 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: circle;\n}\n.listitem3, .listitem4, .listitem5, .listitem6, .listitem7, .listitem8, .listitem9 {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: square;\n}\n.note {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.notebanner {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.notecontent {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.notecontentfixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.output > colgroup {\n    border-left: 1px solid #c1c1c1;\n    border-right: 1px solid #c1c1c1;\n}\n.output > tbody, .output > thead, .output > tfoot {\n    border-top: 1px solid #c1c1c1;\n    border-bottom: 1px solid #c1c1c1;\n}\n.output { border: hidden; }\n.output {\n    background-color: #fafbfe;\n    border: 1px solid #c1c1c1;\n    border-collapse: separate;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    }\n.pageno {\n    background-color: #fafbfe;\n    border-spacing: 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n    text-align: right;\n    vertical-align: top;\n}\n.pages {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: decimal;\n    margin-left: 8px;\n    margin-right: 8px;\n}\n.pagesdate {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.pagesitem {\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    list-style-type: none;\n    margin-left: 6pt;\n}\n.pagesproclabel, .pagesprocname {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.pagestitle {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: bold;\n}\n.paragraph {\n    background-color: #fafbfe;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.parskip > col, .parskip > colgroup > col, .parskip > colgroup, .parskip > tr, .parskip > * > tr, .parskip > thead, .parskip > tbody, .parskip > tfoot { border: none; }\n.parskip {\n    border: none;\n    border-spacing: 0;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n    }\n.prepage {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    text-align: left;\n}\n.proctitle {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.proctitlefixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowfooter {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowfooteremphasis {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.rowfooteremphasisfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.rowfooterempty {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowfooterfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.rowfooterstrong {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowfooterstrongfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowheader {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowheaderemphasis {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.rowheaderemphasisfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: italic;\n    font-weight: normal;\n}\n.rowheaderempty {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowheaderfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.rowheaderstrong {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.rowheaderstrongfixed {\n    background-color: #edf2f9;\n    border-color: #b0b7bb;\n    border-style: solid;\n    border-width: 0 1px 1px 0;\n    color: #112277;\n    font-family: \"Courier New\", Courier, monospace;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.systemfooter, .systemfooter10, .systemfooter2, .systemfooter3, .systemfooter4, .systemfooter5, .systemfooter6, .systemfooter7, .systemfooter8, .systemfooter9 {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.systemtitle, .systemtitle10, .systemtitle2, .systemtitle3, .systemtitle4, .systemtitle5, .systemtitle6, .systemtitle7, .systemtitle8, .systemtitle9 {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size: small;\n    font-style: normal;\n    font-weight: bold;\n}\n.systitleandfootercontainer > col, .systitleandfootercontainer > colgroup > col, .systitleandfootercontainer > colgroup, .systitleandfootercontainer > tr, .systitleandfootercontainer > * > tr, .systitleandfootercontainer > thead, .systitleandfootercontainer > tbody, .systitleandfootercontainer > tfoot { border: none; }\n.systitleandfootercontainer {\n    background-color: #fafbfe;\n    border: none;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.table > col, .table > colgroup > col {\n    border-left: 1px solid #c1c1c1;\n    border-right: 0 solid #c1c1c1;\n}\n.table > tr, .table > * > tr {\n    border-top: 1px solid #c1c1c1;\n    border-bottom: 0 solid #c1c1c1;\n}\n.table { border: hidden; }\n.table {\n    border-color: #c1c1c1;\n    border-style: solid;\n    border-width: 1px 0 0 1px;\n    border-collapse: collapse;\n    border-spacing: 0;\n    }\n.titleandnotecontainer > col, .titleandnotecontainer > colgroup > col, .titleandnotecontainer > colgroup, .titleandnotecontainer > tr, .titleandnotecontainer > * > tr, .titleandnotecontainer > thead, .titleandnotecontainer > tbody, .titleandnotecontainer > tfoot { border: none; }\n.titleandnotecontainer {\n    background-color: #fafbfe;\n    border: none;\n    border-spacing: 1px;\n    color: #000000;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n    width: 100%;\n}\n.titlesandfooters {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.usertext {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\na:visited { color: #800080 }\n.warnbanner {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: bold;\n}\n.warncontent {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: Arial, \"Albany AMT\", Helvetica, Helv;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n.warncontentfixed {\n    background-color: #fafbfe;\n    color: #112277;\n    font-family: \"Courier New\", Courier;\n    font-size:  normal;\n    font-style: normal;\n    font-weight: normal;\n}\n/*]]>*/\n<\/style>\n<\/head>\n<body class=\"l body\">\n<div style=\"padding-bottom: 8px; padding-top: 1px\">\n<div id=\"IDX\" class=\"systitleandfootercontainer\" style=\"border-spacing: 1px\">\n<p><span class=\"c systemtitle\">The SAS System<\/span> <\/p>\n<\/div>\n<div class=\"proc_title_group\">\n<p class=\"c proctitle\">The MEANS Procedure<\/p>\n<\/div>\n<div style=\"padding-bottom: 8px; padding-top: 1px\">\n<table class=\"table\" style=\"border-spacing: 0\" aria-label=\"Summary statistics\">\n<caption aria-label=\"Summary statistics\"><\/caption>\n<colgroup><col/><\/colgroup><colgroup><col/><col/><col/><col/><col/><\/colgroup>\n<thead>\n<tr>\n<th class=\"b header\" scope=\"col\">Variable<\/th>\n<th class=\"r b header\" scope=\"col\">N<\/th>\n<th class=\"r b header\" scope=\"col\">Mean<\/th>\n<th class=\"r b header\" scope=\"col\">Std Dev<\/th>\n<th class=\"r b header\" scope=\"col\">Minimum<\/th>\n<th class=\"r b header\" scope=\"col\">Maximum<\/th>\n<\/tr>\n<\/thead>\n<tbody>\n<tr>\n<th class=\"data\">\n<div class=\"stacked-cell\">\n<div>mpg<\/div>\n<div>disp<\/div>\n<\/div>\n<\/th>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">32<\/div>\n<div class=\"r\">32<\/div>\n<\/div>\n<\/td>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">20.0906250<\/div>\n<div class=\"r\">230.7218750<\/div>\n<\/div>\n<\/td>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">6.0269481<\/div>\n<div class=\"r\">123.9386938<\/div>\n<\/div>\n<\/td>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">10.4000000<\/div>\n<div class=\"r\">71.1000000<\/div>\n<\/div>\n<\/td>\n<td class=\"r data\">\n<div class=\"stacked-cell\">\n<div class=\"r\">33.9000000<\/div>\n<div class=\"r\">472.0000000<\/div>\n<\/div>\n<\/td>\n<\/tr>\n<\/tbody>\n<\/table>\n<\/div>\n<\/div>\n<\/body>\n<\/html>\n","log":"\n152  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods\n152! graphics on / outputfmt=png;\nNOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT\n153  \n154  *| capture: listing;\n155  *| cache: false;\n156  proc means data=work.mtcars;\n157    var mpg disp;\n158  run;\nNOTE: There were 32 observations read from the data set WORK.MTCARS.\nNOTE: PROCEDURE MEANS used (Total process time):\n      real time           0.01 seconds\n      cpu time            0.01 seconds\n      \n159  \n160  ods html5 (id=saspy_internal) close;ods listing;\n","capture":"both"},"evals":[],"jsHooks":[]}</script>
+</div>
+</div>
+</section>
+<section id="sasquatchの仕様上の注意点" class="slide level2 smaller">
+<h2>sasquatchの仕様上の注意点</h2>
+<ul>
+<li>sasquatchはhtml/latexによる出力を想定しており、それ以外のoutputでは体裁が崩れる</li>
+<li>sasquatch : <a href="https://github.com/ropensci/sasquatch#sasquatch" class="uri">https://github.com/ropensci/sasquatch#sasquatch</a></li>
+<li>本ドキュメントはreveal.jsという形式で出力されている。このため、表示結果が不安定だが、captureをlogに絞ることで回避できる</li>
+</ul>
 
 </section></section>
     </div>
