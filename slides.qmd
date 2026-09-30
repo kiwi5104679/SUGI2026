@@ -11,7 +11,7 @@ format:
     theme: serif
     highlight-style: github
     incremental: false
-    embed-resources: false
+    embed-resources: true
     width: 1600
     height: 900
     slide-number: true
