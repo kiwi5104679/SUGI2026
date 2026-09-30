@@ -36,24 +36,16 @@ brave::adhocRequire("SASmarkdown", ref="pinned")
 setwd("..")
 ```
 
-# Introduction {.smaller}
 ## Disclaimer
 本プレゼンテーションで述べられている見解および意見は発表者個人のものであり、その他の個人または組織の見解や意見を反映するものではありません。
 
+# Introduction
 
-## 目的 {.smaller}
-- Quartoでは、コード・結果・文章を一体化して再現性の高いレポートを作成することが可能であり、統計解析のレポーティングに有用である。
-- 近年の統計プログラミング業務ではSASとRを併用するケースが増えているが、Markdownにおける複数言語の利用はコード実行や管理を複雑化させる。
-
-> 本発表では、RとSASを連携する技術の変遷を概観し、\
-> **両言語を両立したレポーティング手法**を整理することを目的とする。
-
-## Quartoを用いたReporting
-- QuartoはMarkdownを基にしたドキュメント作成ツールであり、文章の中に**コードと実行結果**を表示できる
-- ドキュメント内でコードを再実行することで、解析結果を反映したレポートを効率的かつ再現可能な形で更新できる
-- 本スライドもMarkdown形式で作成されている
-
-
+## 背景と目的{.smaller}
+- QuartoはMarkdownを基にしたドキュメント作成ツールである。
+- 文章の中に**コードと実行結果**を表示でき、統計解析のレポーティングに有用である。
+- 近年の統計プログラミング業務ではSASとRを併用するケースが増えているが、\
+Markdownにおける複数言語の利用はコード実行や管理を複雑化させる。
 ```{r}
 #| echo: true
 #| output: true
@@ -61,9 +53,15 @@ head(iris, 5)
 ```
 
 
-
+> 本発表では、RとSASを連携する技術の変遷を概観し、\
+> **両言語を両立したレポーティング手法**を整理することを目的とする。
 
 ## 本発表で扱う3つの方法
+
+<style>
+.reveal section:has(> table) th { color: #c0392b; }
+</style>
+
 
 | アプローチ | 仕組み | SASの実行環境 |
 |---|---|---|
@@ -73,7 +71,7 @@ head(iris, 5)
 
 
 
-# Quarto単体のSASコードブロック{.smaller}
+# Quarto単体のSASコードブロック
 ## Quarto単体のSASコードブロック
 
 - Quartoは{knitr}のエンジン経由で、`{sas}`コードブロックを実行できる
@@ -108,7 +106,7 @@ run;
 
 
 # SASmarkdown
-## SASmarkdown {.smaller}
+## SASmarkdown
 
 - Doug Hemken氏による**Rパッケージ**。
 - knitrのSAS言語エンジンを**拡張**し、実行のみ/ログ出力/HTML出力を切り替えることができる
@@ -130,7 +128,7 @@ knitr::opts_chunk$set(
 )
 ```
 
-## SASmarkdown ログの表示 {.smaller}
+## SASmarkdown ログの表示{.smaller}
 
 
 ```{saslog}
@@ -144,7 +142,7 @@ run;
 > `{sashtml}`へ切り替えることでhtml形式での出力も可能
 
 # sasquatch
-## sasquatch {.smaller}
+## sasquatch
 
 ```{r}
 #| echo: false
@@ -220,7 +218,7 @@ run;
 > **ローカルにSASがある環境**では、**Quarto**単体が手軽に導入可能 \
 > **ローカルにSASが無い環境**では、**sasquatch**でリモートSAS（ODA）に接続可能
 
-## References {.smaller}
+## References
 - Quarto: <https://quarto.org>
 - SASmarkdown (CRAN / GitHub): <https://github.com/Hemken/SASmarkdown>
 - sasquatch (rOpenSci): <https://docs.ropensci.org/sasquatch/>

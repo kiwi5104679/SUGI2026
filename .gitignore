@@ -22,6 +22,7 @@ _authinfo
 *.Rproj
 
 # Local development scratch folder
+dev/*docx
 SASmarkdown*
 sasquatch*
 quartosas*
