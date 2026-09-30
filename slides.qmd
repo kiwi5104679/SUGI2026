@@ -219,6 +219,7 @@ run;
 > **ローカルにSASが無い環境**では、**sasquatch**でリモートSAS（ODA）に接続可能
 
 ## References
+- Presentation Materials: <https://github.com/kiwi5104679/SUGI2026>
 - Quarto: <https://quarto.org>
 - SASmarkdown (CRAN / GitHub): <https://github.com/Hemken/SASmarkdown>
 - sasquatch (rOpenSci): <https://docs.ropensci.org/sasquatch/>
