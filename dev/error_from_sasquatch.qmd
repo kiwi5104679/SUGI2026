@@ -1,0 +1,41 @@
+---
+title: "error_from_sasquatch"
+format: html
+---
+
+# sasquatch でのデータ転送エラー：原因と解決策
+
+## 症状
+- `sas_from_r()` 後に `proc means` で `ERROR: File WORK.MTCARS.DATA does not exist.`
+- `sas_to_r()` で `object 'x' not found`
+- 直接呼ぶと `ImportError: Error importing numpy: you should not try to import numpy from its source directory`
+
+## 原因
+仮想環境 `r-saspy`（**Python 3.9**）に **numpy/pandas の実体が入っておらず**、
+`PYTHONPATH`（EasyBuild）経由で **Python 3.12 用**の numpy/pandas を借りていた。
+→ **ABI 不一致**で numpy の import が失敗 → pandas 依存の転送（`dataframe2sasdata` /
+`sasdata2dataframe`）が全滅。エラーは内部で握りつぶされ、別の症状として表面化していた。
+
+※ SAS のエンコーディング（UTF-8）は無関係だった。
+
+## 解決策
+### 1. 仮想環境内に正しい numpy/pandas/saspy を実体インストール
+```r
+reticulate::virtualenv_install(
+  envname = "/home/gotosh3/.virtualenvs/r-saspy",
+  packages = c("numpy", "pandas", "saspy"),
+  ignore_installed = TRUE   # EB側を無視して仮想環境内に入れる
+)
+```
+
+### 2. レンダリング時に EB の混入を遮断（恒久対策）
+Quarto の setup チャンク冒頭で、reticulate を触る前に実行：
+```r
+Sys.unsetenv("PYTHONPATH")
+```
+
+## 確認方法
+```r
+reticulate::py_run_string("import numpy; print(numpy.__version__, numpy.__file__)")
+# __file__ が .virtualenvs/r-saspy/... を指せばOK
+```
